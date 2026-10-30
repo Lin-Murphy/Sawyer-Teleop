@@ -1,0 +1,81 @@
+{
+  "id": "sideways_lift_1_2_11",
+  "created_date": "2026-10-21",
+  "status": "known_failure_must_pass_before_trajectory_release",
+  "source_episode": "episode_20261020T220453_841cfe94d080",
+  "recording_sha256": {
+    "manifest.json": "71511df75df0f414c080c6bff5fd855725df2b0120362fc557a5ee0bff6709be",
+    "events.jsonl": "2a5f5a29d0802f89090fd9b8d399264e0c47d11ac93904270e9efa7ba3da79d3",
+    "raw.hdf5": "ea2f16e9c33633e7482e6131eb6a9c31252926306fdda47a33053a998a7f1bfc"
+  },
+  "evidence_archive": "artifacts/regression-cases/sideways-lift-1.2.11/evidence.tar.gz",
+  "evidence_archive_sha256": "d382118c44c893eec55be29e7287bda52797c1fa13801338c8250120632a4087",
+  "fixture_sha256": {
+    "samples.npz": "56336f08dcb696944696bc4c3a6d07e30413299556b79cf271eda77cedb88be3",
+    "robot.urdf": "c783ad85b0052f983293662094536b124fb012190f930d22d4121acbab49d39e"
+  },
+  "points": 2482,
+  "source_goals": 1469,
+  "base_frame": "base",
+  "tip_frame": "right_hand",
+  "recorded_trajectory": {
+    "enabled": true,
+    "max_velocity_rad_s": [
+      0.6,
+      0.6,
+      0.6,
+      0.6,
+      0.6,
+      0.6,
+      0.6
+    ],
+    "max_acceleration_rad_s2": [
+      1.5,
+      1.5,
+      1.5,
+      1.5,
+      1.5,
+      1.5,
+      1.5
+    ],
+    "max_following_error_rad": 0.35,
+    "profile": "responsive"
+  },
+  "height_cases": [
+    {
+      "id": "unrequested_dip",
+      "range_s": [
+        5.5,
+        7.0
+      ]
+    },
+    {
+      "id": "unrequested_rise",
+      "range_s": [
+        9.3,
+        12.0
+      ]
+    }
+  ],
+  "minimum_regression_criteria": {
+    "height_outside_target_band_m": 0.02,
+    "whole_record_position_error_mm": {
+      "median": 17.659,
+      "p95": 160.102,
+      "max": 241.713
+    },
+    "derivative_tolerance": 1e-06
+  },
+  "criteria_rationale": "20 mm outside the target height band is a minimum software regression gate to catch the observed 118/149 mm excursions, not a hardware safety clearance. Whole-record unshifted position error must not exceed recorded baseline by more than 5 mm, preventing slower interpolation from masquerading as a path fix. Passing this case alone is not release acceptance.",
+  "required_followup": [
+    "Physical Gazebo replay of the complete recording, including low-height sideways movement, return motion and wrist changes.",
+    "Actual stopping, reversal and overshoot; latest feedback 100 ms, source reference 120 ms and all existing guards.",
+    "Compare delay without time shifting, slowing playback or skipping targets; include A/IK/input timing in a separate full-loop test."
+  ],
+  "limitations": [
+    "Offline replay uses recorded IK goals; it does not re-solve IK or model closed-loop feedback.",
+    "Physical reference derivatives are not guaranteed by software reference limits.",
+    "Full raw input, submitted actions, measured feedback and events remain in the evidence archive.",
+    "Local IK migration remains deferred."
+  ]
+}

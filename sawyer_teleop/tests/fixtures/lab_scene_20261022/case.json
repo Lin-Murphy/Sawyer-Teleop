@@ -1,0 +1,86 @@
+{
+  "id": "lab_scene_20261022",
+  "required_for_every_motion_change": true,
+  "selection": "User selected latest capture as representative of laboratory task",
+  "source_episode": "data/batch_20261022_000042/episode_20261021T230042_a0d3766b8e51",
+  "started_utc": "2026-10-21T23:00:42.450792+00:00",
+  "duration_s": 59.0122483,
+  "raw_recording_complete": true,
+  "recording_error": null,
+  "counts": {
+    "events": 12098,
+    "vr_inputs": 7177,
+    "submitted": 4889,
+    "states": 2917,
+    "unique_goals": 1779
+  },
+  "reasons": {
+    "recording_started": 1,
+    "quest_input": 7177,
+    "bridge_event": 9,
+    "engaged": 8,
+    "hold": 8,
+    "ik_discarded": 5,
+    "submitted": 4889,
+    "recording_ended": 1
+  },
+  "segments": [
+    3,
+    4,
+    5,
+    6,
+    9
+  ],
+  "original_sha256": {
+    "manifest.json": "1b6a23929240afe66691a71bc73ba9a0e3b450d68a5e5a79a2606f6fed337380",
+    "raw.hdf5": "b3894e55a573e90e2479dddba9068192991925c90a644de0ca67c40eea616521",
+    "events.jsonl": "f43e8cbd1dd99c3d2c0e0336555231cd9e53a5dbe9d82cf5575c42817f24d22b"
+  },
+  "fixture_sha256": {
+    "manifest.json": "1b6a23929240afe66691a71bc73ba9a0e3b450d68a5e5a79a2606f6fed337380",
+    "raw.hdf5": "b3894e55a573e90e2479dddba9068192991925c90a644de0ca67c40eea616521",
+    "events.jsonl.gz": "3fc26fe8da9a9cb8a99e702c195f3d95226327d13487c4f37866a13a500a2cb8",
+    "samples.npz": "0626a30944eff3f1a7991943782a36200721e5c719a87d61fe98c2a7ea448da9"
+  },
+  "recorded_trajectory": {
+    "enabled": true,
+    "max_velocity_rad_s": [
+      0.8,
+      0.8,
+      1.0,
+      1.0,
+      1.57,
+      1.57,
+      1.57
+    ],
+    "max_acceleration_rad_s2": [
+      1.5,
+      1.5,
+      3.0,
+      3.0,
+      3.0,
+      3.0,
+      3.0
+    ],
+    "max_following_error_rad": 0.35,
+    "profile": "coordinated"
+  },
+  "offline_gate": {
+    "unshifted_reference_p95_tolerance_mm": 2.0,
+    "derivative_tolerance": 1e-06
+  },
+  "required_release_layers": [
+    "full original VR input integrity",
+    "offline joint reference regression",
+    "ROG physical Gazebo full recording, three repeats",
+    "ROG full A plus B VR replay, three repeats",
+    "original sideways/lift and stop fixtures",
+    "recording integrity and release priority"
+  ],
+  "release_accepted": false,
+  "limitations": [
+    "Offline reference gate is not a physical or full A/B acceptance.",
+    "All Quest packets, events and measured feedback are retained, including failures and repeated packets.",
+    "No automatic IK retry, target skipping, playback slowdown or freshness renewal is permitted."
+  ]
+}

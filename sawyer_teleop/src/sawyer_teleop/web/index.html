@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sawyer · Operator Station</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <header class="masthead">
+    <div class="brand"><span class="brand-mark">S</span><div><strong>SAWYER</strong><span>Operator station</span></div></div>
+    <div class="header-right"><span class="web-badge">WEB · LOCAL</span><span id="connectionBadge" class="status-pill">Connecting to local service</span><button id="stopSession" class="danger" disabled>Stop &amp; disconnect</button></div>
+  </header>
+  <main>
+    <div class="page-heading"><div><p class="eyebrow">CONTROL WORKSPACE</p><h1>Your robot, in view.</h1><p id="summary">Loading the local operator service…</p></div><div class="ownership"><span id="ownerLabel">Checking page access</span><button id="claim" hidden>Acquire controls</button></div></div>
+    <div id="notice" class="notice" role="alert" hidden></div>
+    <div class="workspace">
+      <div class="left-column">
+        <section class="card" aria-labelledby="connectionsHeading">
+          <div class="card-heading"><h2 id="connectionsHeading">Connections</h2><span class="step">01</span></div>
+          <div class="form-grid">
+            <label class="full">Backend<select id="backend" data-connection><option value="gazebo">Gazebo Simulation</option><option value="fake">Software Test</option><option value="intera">Real Sawyer</option></select></label>
+            <label class="full">B address<input id="host" list="hostHistory" placeholder="127.0.0.1" maxlength="255" data-connection><datalist id="hostHistory"></datalist></label>
+            <label class="full">Quest serial<div class="input-action"><input id="serial" list="deviceList" placeholder="Auto-select a single authorized Quest" maxlength="255" data-connection><button id="scan" class="subtle">Find</button></div><datalist id="deviceList"></datalist></label>
+          </div>
+          <p id="usb" class="hint">Quest USB: checking</p>
+          <button id="connect" class="primary wide" disabled>Connect</button>
+          <div class="separator"></div>
+          <label class="check"><input type="checkbox" id="smoothing" data-connection> Smooth teleop</label>
+          <label class="compact-label">Strength<select id="smoothingMs" data-connection><option value="20">Light · 20 ms</option><option value="40">Heavy · 40 ms</option><option value="150">DROID-like · 150 ms</option></select></label>
+          <p class="hint">Smoothing and camera changes apply on the next connection.</p>
+          <div class="separator"></div>
+          <label>Motion option<select id="profile"></select></label>
+          <div class="protection-row"><label class="check"><input type="checkbox" id="protection" checked> Joint protection · ±0.35 rad</label><button id="apply">Apply</button></div>
+          <p id="profileNote" class="hint">Release grip and end recording before applying a motion option.</p>
+        </section>
+
+        <section class="card" aria-labelledby="recordHeading">
+          <div class="card-heading"><h2 id="recordHeading">Batch recording</h2><span class="step">02</span></div>
+          <div class="form-grid" id="recordFields">
+            <label class="full">Batch name<input id="batchName" maxlength="80" placeholder="Leave blank to name by start time" data-record></label>
+            <label class="full">Task description<input id="task" placeholder="e.g. Pick up and place a block" maxlength="2000" data-record></label>
+            <div class="number-grid full"><label>Episodes<input id="count" type="number" min="1" max="10000" step="1" value="10" data-record></label><label>Duration / s<input id="seconds" type="number" min="0.1" max="120" step="0.1" value="60" data-record></label><label>Interval / s<input id="pause" type="number" min="0" max="300" step="0.1" value="5" data-record></label></div>
+            <label class="full">Output folder on A<div class="input-action"><input id="output" data-record><button id="browse" class="subtle" data-record>Browse</button></div></label>
+          </div>
+          <label class="check camera-check"><input type="checkbox" id="cameras" data-connection> Record workspace camera</label>
+          <div id="recordError" class="inline-error" role="alert" hidden></div>
+          <div class="record-meter"><span id="recordPhase">Not recording</span><strong id="recordTime">0.0 / 60.0 s</strong><progress id="progress" value="0" max="60"></progress></div>
+          <p id="counts" class="hint">Saved 0 · Discarded 0 · Total 0.0 s</p>
+          <button id="recordToggle" class="primary wide" disabled>Start Recording</button>
+          <div class="two-buttons"><button id="save" disabled>Save episode <kbd>A</kbd></button><button id="discard" disabled>Discard episode <kbd>B</kbd></button></div>
+          <p id="recordDetail" class="hint wrap"></p>
+        </section>
+      </div>
+
+      <div class="right-column">
+        <section class="card" aria-labelledby="statusHeading">
+          <div class="card-heading"><h2 id="statusHeading">Live status</h2><span id="backendLabel" class="small-tag">Not connected</span></div>
+          <div class="metrics"><div><span>A 接收 · Quest→A</span><strong id="inputHz">—</strong><small>Hz · 有效协议包</small></div><div><span>A 发送给 B · A→B</span><strong id="targetHz">—</strong><small>Hz · 实际发送目标</small></div><div title="B 实际成功提交给后端的频率；不是机器人内部伺服频率"><span>B 执行提交</span><strong id="submissionHz">—</strong><small>Hz · B→机器人后端</small></div><div title="A 实际收到 B 状态包的频率"><span>B→A 反馈接收</span><strong id="feedbackHz">—</strong><small>Hz · A 收到的状态包</small></div><div><span>Network RTT</span><strong id="rtt">—</strong><small>milliseconds</small></div><div><span>Feedback age</span><strong id="feedbackAge">—</strong><small id="feedbackUnit">no valid feedback</small></div></div>
+          <div class="tracking-grid"><span id="stream">Quest data: waiting</span><span id="headApp">App: —</span><span id="headMount">Worn: —</span><span id="headTracking">Head: —</span><span id="leftHand">Left: —</span><span id="rightHand">Right: —</span></div>
+          <div class="session-actions"><div><strong id="calibration">Not calibrated</strong><p class="hint">Face base +X. Calibrate, release, then squeeze the right grip.</p></div><div class="two-buttons"><button id="calibrate" disabled>Calibrate</button><button id="resetArm" disabled>Reset arm</button></div></div>
+          <section class="diagnostics" aria-labelledby="diagnosticsHeading">
+            <h3 id="diagnosticsHeading">Timing and feedback diagnostics</h3>
+            <dl id="diagnostics"></dl>
+            <dl><dt>Last pause reason</dt><dd id="pauseReason">—</dd></dl>
+            <details id="lastPauseToggle" class="pause-toggle"><summary>Last pause details</summary><pre id="pauseDetails" class="wrap">No pause recorded.</pre></details>
+          </section>
+        </section>
+
+
+      </div>
+    </div>
+
+    <section class="card activity" aria-labelledby="activityHeading">
+      <div class="card-heading"><h2 id="activityHeading">Activity</h2><div class="log-controls"><label class="sr-only" for="logFilter">Log detail</label><select id="logFilter"><option value="events">Events</option><option value="all">Events + motion</option><option value="warnings">Warnings &amp; errors</option></select><label class="check"><input type="checkbox" id="followLog" checked> Follow</label><label class="check"><input type="checkbox" id="pauseLog"> Pause display</label><button id="clearLog" class="subtle">Clear</button></div></div>
+      <div id="logs" class="log-lines" role="log" aria-label="Operator activity"></div>
+      <p class="hint">Latest 600 events in memory. Log controls only affect this display.</p>
+    </section>
+    <details class="card view-card" id="robotPanel">
+      <summary class="view-toggle"><span><strong>Actual robot posture</strong><small>Read-only · B joint feedback</small></span><span class="view-toggle-label" id="viewToggleLabel">Show 3D view</span></summary>
+      <div class="view-body">
+        <div class="viewport"><canvas id="robotCanvas" aria-label="Interactive read-only three-dimensional robot feedback" tabindex="0"></canvas><div id="viewOverlay" class="view-overlay">Waiting for actual feedback.</div><span id="viewStatus" class="view-status">DISPLAY OFF</span><button id="resetView" class="view-reset" disabled>Reset view</button></div>
+        <div class="view-footer"><span>Drag to rotate · Scroll to zoom · Arrow keys to rotate</span><span>Simplified geometry · no collision information</span></div>
+        <div class="joint-grid" id="joints"></div>
+      </div>
+    </details>
+    <footer><span>Sawyer A · Web interface</span><span>Closing, refreshing, or losing this page for 3 seconds ends its control session. Reconnect and recalibrate to resume.</span><span>Local Web operator station.</span></footer>
+  </main>
+  <dialog id="folderDialog"><div class="card-heading"><h2>Choose a folder on A</h2><button id="folderClose" aria-label="Close folder picker">Close</button></div><p class="hint">Files are saved on the computer running the A service.</p><div class="input-action"><input id="folderPath" aria-label="Folder path"><button id="folderGo">Go</button><button id="folderUp">Up</button></div><div id="folderRoots" class="folder-roots"></div><div id="folderList" class="folder-list"></div><p id="folderError" class="inline-error" hidden></p><button id="folderChoose" class="primary wide">Use this folder</button></dialog>
+</body>
+</html>

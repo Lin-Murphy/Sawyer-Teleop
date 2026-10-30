@@ -1,0 +1,17 @@
+{
+    "openxr_version": "1.1.36",
+    "headers_source": "https://github.com/KhronosGroup/OpenXR-SDK/tree/release-1.1.36/include/openxr",
+    "loader_source": "https://repo.maven.apache.org/maven2/org/khronos/openxr/openxr_loader_for_android/1.1.36/openxr_loader_for_android-1.1.36.aar",
+    "license": "Apache-2.0; see vendor/LICENSE and AAR META-INF/LICENSE",
+    "application_id": "org.sawyer.questinput",
+    "version_code": 9,
+    "version_name": "4.3-input120",
+    "requested_hz": 120,
+    "protocol": 3,
+    "recovered_source": "sawyer-transfer-lab-20261019/project.tar.gz:sawyer_sim/quest/openxr",
+    "rebuild_date": "2026-10-23",
+    "ndk": "21.3.6528147",
+    "build_tools": "32.0.0",
+    "android_platform": 32,
+    "signing": "Original sample debug key; development and laboratory use only"
+}

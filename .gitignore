@@ -1,0 +1,27 @@
+# 本机生成，不入库
+windows-runtime/
+windows-local/
+ubuntu-local/
+gazebo-image/*.tar.gz
+deploy/
+deploy-*/
+
+# Python / 测试缓存
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+.venv-b/
+
+# 本机机器人地址配置（只提交 .example）
+real-b.env
+
+# 运行期输出
+sawyer_teleop/runtime/
+sawyer_teleop/data/
+sawyer_teleop/logs/
+sawyer_teleop/artifacts/
+sawyer_teleop/build/
+sawyer_teleop/dist/
+gazebo-image/*.part

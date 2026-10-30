@@ -1,0 +1,11 @@
+{
+  "image": "sawyer/simulation:20261017",
+  "image_id": "sha256:f5e1e474226438833d57352952d9c347b952a206366b02bb8311477bde665046",
+  "config_digest": "sha256:f07d6afb39bf246e62b641c98e19d3907715b0075afc692154627501937bfe86",
+  "archive": "sawyer-simulation-20261017.tar.gz",
+  "archive_sha256": "d75a4ac8db1358258d76766e0c2c37fd4dd115d9607ec5b141affb8a01f1f5b7",
+  "bytes": 1018624975,
+  "layers_verified": 32,
+  "verification_elapsed_s": 3.04,
+  "source": "ROG existing OCI image; docker save only; all archive blobs verified; no service restart"
+}

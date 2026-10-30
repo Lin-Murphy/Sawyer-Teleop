@@ -1,0 +1,25 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/../windows-runtime/python/python.exe",
+  "files.eol": "\n",
+  "[bat]": {
+    "files.eol": "\r\n"
+  },
+  "search.exclude": {
+    "runtime/**": true,
+    "artifacts/**": true,
+    "data/**": true
+  },
+  "files.watcherExclude": {
+    "**/runtime/**": true,
+    "**/artifacts/**": true,
+    "**/data/**": true
+  },
+  "python.analysis.extraPaths": [
+    "./src"
+  ],
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [
+    "tests"
+  ]
+}

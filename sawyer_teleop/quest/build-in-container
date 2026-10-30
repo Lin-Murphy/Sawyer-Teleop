@@ -1,0 +1,36 @@
+#!/bin/bash
+set -euo pipefail
+cd /src
+out=build
+mkdir -p "$out/include/openxr" "$out/apk/lib/arm64-v8a" "$out/classes"
+cp vendor/*.h "$out/include/openxr/"
+python3 - <<'PY'
+import zipfile
+from pathlib import Path
+with zipfile.ZipFile('vendor/openxr_loader.aar') as z:
+    Path('build/apk/lib/arm64-v8a/libopenxr_loader.so').write_bytes(z.read('prefab/modules/openxr_loader/libs/android.arm64-v8a/libopenxr_loader.so'))
+PY
+ndk=/opt/android-sdk/ndk/21.3.6528147
+cc="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+"$cc" -fPIC -I"$ndk/sources/android/native_app_glue" -c "$ndk/sources/android/native_app_glue/android_native_app_glue.c" -o "$out/glue.o"
+"${cc}++" -std=c++17 -Wall -Wextra -Wno-missing-field-initializers -fPIC -shared -O2 -static-libstdc++ \
+    -I"$out/include" -I"$ndk/sources/android/native_app_glue" src/main.cpp "$out/glue.o" \
+    -L"$out/apk/lib/arm64-v8a" -lopenxr_loader -landroid -llog -lEGL -lGLESv3 \
+    -o "$out/apk/lib/arm64-v8a/libsawyer_passthrough.so"
+sdk=/opt/android-sdk/platforms/android-32/android.jar
+bt=/opt/android-sdk/build-tools/32.0.0
+javac -source 8 -target 8 -bootclasspath "$sdk" -d "$out/classes" src/MainActivity.java
+"$bt/d8" --lib "$sdk" --output "$out/apk" "$out/classes/com/rail/oculus/teleop/MainActivity.class"
+"$bt/aapt2" link --manifest AndroidManifest.xml -I "$sdk" -o "$out/unsigned.apk"
+python3 - <<'ZIP'
+import zipfile
+from pathlib import Path
+with zipfile.ZipFile('build/unsigned.apk', 'a', compression=zipfile.ZIP_DEFLATED) as z:
+    for p in Path('build/apk').rglob('*'):
+        if p.is_file():
+            z.write(p, str(p.relative_to('build/apk')))
+ZIP
+"$bt/zipalign" -f 4 "$out/unsigned.apk" "$out/aligned.apk"
+"$bt/apksigner" sign --ks signing/android.debug.keystore --ks-key-alias androiddebugkey \
+    --ks-pass pass:android --key-pass pass:android --out "$out/sawyer-quest-input-120hz.apk" "$out/aligned.apk"
+"$bt/apksigner" verify "$out/sawyer-quest-input-120hz.apk"

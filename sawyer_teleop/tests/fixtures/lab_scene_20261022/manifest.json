@@ -1,0 +1,363 @@
+{
+  "robot": {
+    "type": "hello",
+    "version": 1,
+    "session": "d2b57299a93347d2b008695734b48118",
+    "generation": 1,
+    "joints": [
+      "right_j0",
+      "right_j1",
+      "right_j2",
+      "right_j3",
+      "right_j4",
+      "right_j5",
+      "right_j6"
+    ],
+    "units": "rad",
+    "base_frame": "base",
+    "tip_frame": "right_hand",
+    "backend": "gazebo",
+    "ik": true,
+    "gripper_observation": true,
+    "neutral_pose": {
+      "available": true,
+      "source": "/named_poses/right/poses/neutral",
+      "joint_names": [
+        "right_j0",
+        "right_j1",
+        "right_j2",
+        "right_j3",
+        "right_j4",
+        "right_j5",
+        "right_j6"
+      ],
+      "q": [
+        0.0,
+        -1.18,
+        0.0,
+        2.18,
+        0.0,
+        0.57,
+        -2.967085307179586
+      ],
+      "source_q": [
+        0.0,
+        -1.18,
+        0.0,
+        2.18,
+        0.0,
+        0.57,
+        3.3161
+      ],
+      "adaptation": "gazebo_j6_equivalent_minus_one_turn"
+    },
+    "kinematics": {
+      "available": true,
+      "schema": 1,
+      "base_frame": "base",
+      "tip_frame": "right_hand",
+      "joints": [
+        "right_j0",
+        "right_j1",
+        "right_j2",
+        "right_j3",
+        "right_j4",
+        "right_j5",
+        "right_j6"
+      ],
+      "chain": [
+        {
+          "name": "right_arm_mount",
+          "type": "fixed",
+          "xyz": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rpy": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "name": "right_j0",
+          "type": "revolute",
+          "xyz": [
+            0.0,
+            0.0,
+            0.08
+          ],
+          "rpy": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "lower": -3.0503,
+          "upper": 3.0503
+        },
+        {
+          "name": "right_j1",
+          "type": "revolute",
+          "xyz": [
+            0.081,
+            0.05,
+            0.237
+          ],
+          "rpy": [
+            -1.57079632679,
+            1.57079632679,
+            0.0
+          ],
+          "axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "lower": -3.8095,
+          "upper": 2.2736
+        },
+        {
+          "name": "right_j2",
+          "type": "revolute",
+          "xyz": [
+            0.0,
+            -0.14,
+            0.1425
+          ],
+          "rpy": [
+            1.57079632679,
+            0.0,
+            0.0
+          ],
+          "axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "lower": -3.0426,
+          "upper": 3.0426
+        },
+        {
+          "name": "right_j3",
+          "type": "revolute",
+          "xyz": [
+            0.0,
+            -0.042,
+            0.26
+          ],
+          "rpy": [
+            -1.57079632679,
+            0.0,
+            0.0
+          ],
+          "axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "lower": -3.0439,
+          "upper": 3.0439
+        },
+        {
+          "name": "right_j4",
+          "type": "revolute",
+          "xyz": [
+            0.0,
+            -0.125,
+            -0.1265
+          ],
+          "rpy": [
+            1.57079632679,
+            0.0,
+            0.0
+          ],
+          "axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "lower": -2.9761,
+          "upper": 2.9761
+        },
+        {
+          "name": "right_j5",
+          "type": "revolute",
+          "xyz": [
+            0.0,
+            0.031,
+            0.275
+          ],
+          "rpy": [
+            -1.57079632679,
+            0.0,
+            0.0
+          ],
+          "axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "lower": -2.9761,
+          "upper": 2.9761
+        },
+        {
+          "name": "right_j6",
+          "type": "revolute",
+          "xyz": [
+            0.0,
+            -0.11,
+            0.1053
+          ],
+          "rpy": [
+            -1.57079632679,
+            -0.17453,
+            3.1416
+          ],
+          "axis": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "lower": -3.14,
+          "upper": 3.14
+        },
+        {
+          "name": "right_hand",
+          "type": "fixed",
+          "xyz": [
+            0.0,
+            0.0,
+            0.0245
+          ],
+          "rpy": [
+            0.0,
+            0.0,
+            1.570796
+          ]
+        }
+      ],
+      "sha256": "442d4027d9c5d8db17ac0b2513fce5651d4eb8607eff61a00ff3696b16e63cf9",
+      "urdf_sha256": "ceaf511d6dddf30a493818a340547a37df521408cd2e31409dc5e4b8703419aa"
+    },
+    "local_ik_targets": true,
+    "local_ik_unavailable_reason": null,
+    "gripper_control": true,
+    "state_timeout_s": 0.1,
+    "reference_timeout_s": 0.18,
+    "command_timeout_s": 0.2,
+    "joint_trajectory": {
+      "algorithm": "online_cubic_hermite_v2",
+      "control_hz": 100,
+      "source_sample_timing": true,
+      "profiles": {
+        "cubic": "online_cubic_hermite_v2",
+        "responsive": "online_bounded_acceleration_v1",
+        "coordinated": "online_coordinated_acceleration_v1"
+      },
+      "per_sample_receipts": true
+    },
+    "description": {
+      "model": "Sawyer",
+      "simulator": "Gazebo Classic",
+      "simulation": true,
+      "gripper": true,
+      "gripper_model": "generic two-finger simulation",
+      "command_mode": "TRAJECTORY_MODE",
+      "velocity_source": "B planned reference",
+      "clock": "ROS /clock",
+      "clock_reset": "restart bridge required",
+      "hardware_status": "not applicable",
+      "captured_time": "wall-time observation of matching /clock"
+    }
+  },
+  "mapping": [
+    [
+      -0.920084244576796,
+      0.0,
+      0.3917205418171819
+    ],
+    [
+      0.3917205418171819,
+      -0.0,
+      0.920084244576796
+    ],
+    [
+      0.0,
+      1.0,
+      0.0
+    ]
+  ],
+  "position_scale": 1.0,
+  "operator_hz": 120,
+  "motion": {
+    "enabled": true,
+    "time_constant_ms": 20.0,
+    "algorithm": "cartesian_exponential_v1",
+    "ik_seed": "previous_target"
+  },
+  "trajectory": {
+    "enabled": true,
+    "max_velocity_rad_s": [
+      0.8,
+      0.8,
+      1.0,
+      1.0,
+      1.57,
+      1.57,
+      1.57
+    ],
+    "max_acceleration_rad_s2": [
+      1.5,
+      1.5,
+      3.0,
+      3.0,
+      3.0,
+      3.0,
+      3.0
+    ],
+    "max_following_error_rad": 0.35,
+    "profile": "coordinated"
+  },
+  "ik": {
+    "mode": "local",
+    "model_sha256": "442d4027d9c5d8db17ac0b2513fce5651d4eb8607eff61a00ff3696b16e63cf9"
+  },
+  "ik_dispatch": "completion_wakeup_with_fresh_input_check",
+  "ik_schedule": "latest_sample_after_completion_or_minimum_interval",
+  "quest_epoch": [
+    "xr-97968586206",
+    37,
+    37,
+    2
+  ],
+  "backend": "gazebo",
+  "batch": {
+    "name": "batch_20261022_000042",
+    "count": 10,
+    "seconds": 60.0,
+    "pause": 5.0,
+    "task": "",
+    "root": "D:\\project\\Sawyer\\sawyer_teleop\\data"
+  },
+  "attempt": 1,
+  "camera_config": [],
+  "cameras": [],
+  "started_utc": "2026-10-21T23:00:42.450792+00:00",
+  "schema_version": 1,
+  "action_semantics": "absolute_joint_target_rad",
+  "camera_timestamp": "host_read_completion; exposure time unknown",
+  "ended_ns": 1225064509765600,
+  "stop": {
+    "holding": false,
+    "capture_closed": true,
+    "reason": "explicit_recording_end"
+  },
+  "task_success": null,
+  "recording_error": null
+}

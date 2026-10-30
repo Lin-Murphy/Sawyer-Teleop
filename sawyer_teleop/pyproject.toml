@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sawyer-teleop"
+version = "1.3.0.dev0"
+description = "Cross-platform operator station and small Intera bridge"
+requires-python = ">=3.8"
+dependencies = ["ruckig==0.12.2"]
+
+[project.optional-dependencies]
+operator = [
+  "numpy==1.24.4",
+  "scipy==1.10.1",
+  "h5py==3.10.0",
+  "opencv-python==4.8.1.78",
+]
+test = ["pytest>=7,<9"]
+
+[project.scripts]
+sawyer-teleop = "sawyer_teleop.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sawyer_teleop = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

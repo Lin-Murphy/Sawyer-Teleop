@@ -1,0 +1,62 @@
+{
+  "joint_protection_enabled": true,
+  "robot_host": "127.0.0.1",
+  "control_port": 8875,
+  "ik_port": 8876,
+  "state_timeout_s": 0.1,
+  "operator_hz": 120,
+  "position_scale": 1.0,
+  "motion": {
+    "enabled": true,
+    "time_constant_ms": 20.0
+  },
+  "trajectory": {
+    "enabled": true,
+    "max_velocity_rad_s": [
+      0.8,
+      0.8,
+      1.0,
+      1.0,
+      1.57,
+      1.57,
+      1.57
+    ],
+    "max_acceleration_rad_s2": [
+      1.5,
+      1.5,
+      3.0,
+      3.0,
+      3.0,
+      3.0,
+      3.0
+    ],
+    "max_following_error_rad": 0.5,
+    "profile": "coordinated"
+  },
+  "quest_serial": null,
+  "adb": "adb",
+  "data_dir": "../data",
+  "cameras": [
+    {
+      "name": "front",
+      "device": 0,
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "backend": "auto"
+    }
+  ],
+  "connection_backend": "gazebo",
+  "record_cameras_enabled": false,
+  "ik_mode": "local",
+  "feedback_profile": "gazebo_250ms",
+  "gazebo_max_acceleration_rad_s2": [
+    6.0,
+    6.0,
+    12.0,
+    12.0,
+    12.0,
+    12.0,
+    12.0
+  ]
+}
