@@ -38,7 +38,7 @@ class FeedbackLog:
         root = Path(__file__).parent
         hashes = {name: hashlib.sha256((root/name).read_bytes()).hexdigest()
                   for name in ('intera_backend.py', 'bridge.py', 'intera_cartesian.py',
-                               'feedback_log.py')}
+                               'feedback_log.py', 'dynamixel_gripper.py')}
         self.write('startup', configuration=configuration, source_sha256=hashes,
                    max_bytes=self.handler.maxBytes, backups=self.handler.backupCount)
 

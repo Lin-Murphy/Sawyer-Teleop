@@ -1,7 +1,7 @@
 # 实验室实体 Sawyer B
 
 把整个 `B-Lab-Ubuntu` 文件夹复制到实验室 Ubuntu 的一个新目录，保留旧运行版。
-复用原有 Ubuntu 20.04 / Python 3.8 / ROS Noetic / Intera，不需要 Docker、仿真或 pip 安装。
+复用原有 Ubuntu 20.04 / Python 3.8 / ROS Noetic / Intera，不需要 Docker或仿真。可选外接夹爪需要另装 Dynamixel SDK，见部署包根目录的 `docs/DEPLOYMENT.md`。
 需要一个已编译、包含 Intera SDK 的 catkin 工作空间（默认 `~/sawyer_ws`），不会修改它。
 
 ## 首次填写地址
@@ -43,7 +43,7 @@ bash Start-B.sh
 
 | 项 | 值 |
 | --- | --- |
-| 控制 | 100 Hz，工具 `right_hand`；夹爪尚未接入 |
+| 控制 | 100 Hz，工具 `right_hand`；可选外接 Dynamixel 夹爪，默认禁用，配置见 docs/DEPLOYMENT.md |
 | 最新反馈 / 源引用 / 命令期限 | 100 / 250 / 250 ms |
 | IK | 官方远端服务；本地 IK 和 Gazebo 快速参数不用于实机 |
 | 关节跳变保护 | A、B 各自独立检查，每关节 0.35 rad |

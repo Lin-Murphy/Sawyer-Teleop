@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ROLE = 'B-Lab-Ubuntu'
 B_FILES = (
     'src/sawyer_teleop', 'pyproject.toml', 'runtime-wheels',
-    'config/real-b.env.example', 'config/lab-neutral-pose.yaml',
+    'config/real-b.env.example', 'config/lab-neutral-pose.yaml', 'docs/DEPLOYMENT.md',
     'scripts/ubuntu/Start-B-Real.sh', 'scripts/prepare_trajectory_runtime.py', 'scripts/probe_intera_ik.py',
 )
 IGNORE = shutil.ignore_patterns(
@@ -58,7 +58,7 @@ def copy(root, relative, destination):
         shutil.copy2(source, target)
 
 
-def write_manifest(directory, created_at):
+def write_manifest(directory, created_at, configuration='Initial defaults only; edit addresses locally.'):
     files = {}
     for path in sorted(directory.rglob('*')):
         if path.is_symlink():
@@ -69,7 +69,7 @@ def write_manifest(directory, created_at):
     manifest = {
         'role': directory.name, 'created_at_utc': created_at,
         'release_accepted': False, 'hardware_validation': 'pending',
-        'configuration': 'Initial defaults only; edit addresses locally.',
+        'configuration': configuration,
         'files': files,
     }
     (directory / 'DEPLOYMENT-MANIFEST.json').write_text(
@@ -87,9 +87,15 @@ def destination(output, root):
     return output, root
 
 
-def build(output, root=ROOT):
+def build(output, root=ROOT, config=None):
     """Write <output>/B-Lab-Ubuntu; output must not exist yet."""
     output, root = destination(output, root)
+    if config is None:
+        local_config = root.parent / 'windows-local/config/real-b.env'
+        config = local_config if local_config.exists() else root / 'config/real-b.env.example'
+    config = Path(config).resolve()
+    if not config.is_file():
+        raise FileNotFoundError('B configuration not found: ' + str(config))
     verify_resources(root)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.sawyer-export-', dir=output.parent) as temporary:
@@ -98,11 +104,14 @@ def build(output, root=ROOT):
         shutil.copytree(root / 'packaging' / ROLE, b)
         for name in B_FILES:
             copy(root, name, b)
-        shutil.copy2(b / 'config/real-b.env.example', b / 'config/real-b.env')
+        shutil.copy2(config, b / 'config/real-b.env')
         # The launcher's dependency error points to this document.
-        (b / 'docs').mkdir()
+        (b / 'docs').mkdir(exist_ok=True)
         shutil.copy2(b / 'README.md', b / 'docs/DEPLOYMENT_B.md')
-        result = {ROLE: write_manifest(b, datetime.now(timezone.utc).isoformat())}
+        configuration = ('Initial defaults only; edit addresses locally.'
+                         if config == (root / 'config/real-b.env.example').resolve()
+                         else 'Operator-selected lab configuration copied byte-for-byte.')
+        result = {ROLE: write_manifest(b, datetime.now(timezone.utc).isoformat(), configuration)}
         if output.exists() or output.is_symlink():
             raise FileExistsError('Output appeared during export; it was not overwritten.')
         stage.rename(output)
@@ -113,4 +122,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True,
                         help='New directory outside the source project; B-Lab-Ubuntu is written inside it')
-    print(json.dumps(build(parser.parse_args().output), indent=2))
+    parser.add_argument('--config', type=Path,
+                        help='B env file; defaults to ../windows-local/config/real-b.env if present, otherwise the example')
+    args = parser.parse_args()
+    print(json.dumps(build(args.output, config=args.config), indent=2))

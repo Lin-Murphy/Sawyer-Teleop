@@ -162,7 +162,11 @@ class Episode:
                                "source_seq": sample["seq"], "q": sample["q"], "dq": sample["dq"],
                                "eef_pos": sample["pose"]["p"], "eef_quat": sample["pose"]["q"],
                                "gripper_position_m": fingers if fingers is not None else [0., 0.],
-                               "gripper_valid": bool(gripper.get("valid") and fingers is not None)}
+                               "gripper_valid": bool(gripper.get("valid") and fingers is not None),
+                               "gripper_position_ticks": gripper.get("position_ticks") or 0,
+                               "gripper_ticks_valid": bool(gripper.get("valid") and gripper.get("position_ticks") is not None),
+                               "gripper_target_ticks": gripper.get("target_ticks") or 0,
+                               "gripper_feedback_age_ms": gripper.get("age_ms") or 0.}
                         states.append(row)
                 elif kind == "command":
                     commands.append({

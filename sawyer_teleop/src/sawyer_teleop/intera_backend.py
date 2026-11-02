@@ -10,10 +10,16 @@ from .neutral import read_neutral_pose
 from .kinematics_model import read_kinematics_model
 
 
+# Bounded robot/B clock skew allowance for the lab demo. Motion references
+# retain their original monotonic deadlines; this is not clock correction.
+FEEDBACK_FUTURE_TOLERANCE_S = .05
+
+
 class InteraBackend:
     name = "intera"
 
-    def __init__(self, tip_frame="right_hand", state_timeout=.1, status_timeout=.5):
+    def __init__(self, tip_frame="right_hand", state_timeout=.1, status_timeout=.5,
+                 gripper_port=None, gripper_command_timeout=.25):
         import rospy
         from sensor_msgs.msg import JointState
         from intera_core_msgs.msg import (
@@ -64,16 +70,32 @@ class InteraBackend:
         from .ros_service import PersistentService
         self.ik = PersistentService(rospy, "/ExternalTools/right/PositionKinematicsNode/IKService",
                                     SolvePositionIK)
+        self.gripper = None
+        # No serial access unless explicitly configured. Keep capability absent
+        # for older installations with no external gripper.
+        if gripper_port:
+            from .dynamixel_gripper import DynamixelGripper
+            try:
+                self.gripper = DynamixelGripper(gripper_port, gripper_command_timeout)
+            except Exception:
+                self.close()
+                raise
+            self.publish_gripper = self.gripper.command
+            self.hold_gripper = self.gripper.hold
 
     def description(self):
         return {"model": "Sawyer", "intera_version": self.version,
-                "gripper": False, "command_mode": "POSITION_MODE"}
+                "gripper": getattr(self, "gripper", None) is not None,
+                "gripper_model": "Dynamixel external" if getattr(self, "gripper", None) else None,
+                "command_mode": "POSITION_MODE"}
 
     def _accept(self, name, stamp, update):
         with self.lock:
-            age = self.ros.Time.now().to_sec() - stamp
+            source_now = self.ros.Time.now().to_sec()
+            age = source_now - stamp
             limit = self.state_timeout if name in ("joint", "pose") else self.status_timeout
-            if not math.isfinite(stamp) or stamp <= 0 or not 0 <= age <= limit:
+            if (not math.isfinite(source_now) or not math.isfinite(stamp) or stamp <= 0
+                    or stamp > source_now + FEEDBACK_FUTURE_TOLERANCE_S or age > limit):
                 self.invalid[name] = name + "_source_time_invalid"
                 return
             previous = self.stamps.get(name, -1)
@@ -84,7 +106,9 @@ class InteraBackend:
             update()
             self.stamps[name] = stamp
             self.received[name] = ns()
-            self.captured[name] = self.received[name]-int(age*1e9)
+            # Keep the raw source stamp for ordering/diagnostics, but never
+            # create a future monotonic capture or extend the stale deadline.
+            self.captured[name] = self.received[name]-int(max(0., age)*1e9)
             self.invalid.pop(name, None)
 
     def _joint(self, msg):
@@ -143,8 +167,9 @@ class InteraBackend:
             # its creation time is not a periodic feedback heartbeat.
             stamp = msg.time.to_sec()
             with self.lock:
-                if (not math.isfinite(stamp) or stamp <= 0
-                        or stamp > self.ros.Time.now().to_sec()):
+                source_now = self.ros.Time.now().to_sec()
+                if (not math.isfinite(source_now) or not math.isfinite(stamp) or stamp <= 0
+                        or stamp > source_now + FEEDBACK_FUTURE_TOLERANCE_S):
                     self.invalid["cuff"] = "cuff_source_time_invalid"
                     return
                 previous = self.stamps.get("cuff", -1)
@@ -190,6 +215,10 @@ class InteraBackend:
                 fault = fault or "hand_guiding"
             if self.collision:
                 fault = fault or "robot_collision"
+            gripper = getattr(self, "gripper", None)
+            gripper_state = gripper.snapshot() if gripper is not None else {"supported": False}
+            if gripper is not None and not gripper_state["valid"]:
+                fault = fault or gripper_state["fault"]
             return {
                 "seq": self.seq,
                 "captured_ns": min(self.captured.get("joint", 0), self.captured.get("pose", 0)),
@@ -198,7 +227,7 @@ class InteraBackend:
                 "pose_source_stamp": self.stamps.get("pose", 0),
                 "q": self.q, "dq": self.dq, "pose": self.endpoint,
                 "valid": fault is None and self.q is not None and self.endpoint is not None,
-                "fault": fault, "robot": r,
+                "fault": fault, "robot": r, "gripper": gripper_state,
                 "feedback_diagnostics": {
                     "invalid": dict(self.invalid), "source_stamps": dict(self.stamps),
                     "received_ns": dict(self.received), "captured_ns": dict(self.captured),
@@ -244,6 +273,14 @@ class InteraBackend:
                 native.stop()
             except Exception:
                 self.ros.logerr("Intera Cartesian shutdown STOP failed")
+        gripper = getattr(self, "gripper", None)
+        if gripper is not None:
+            try:
+                gripper.close()
+                if gripper.snapshot()["fault"]:
+                    self.ros.logerr(gripper.snapshot()["fault"])
+            except Exception as exc:
+                self.ros.logerr("Gripper shutdown failed: %s" % exc)
         if getattr(self, "ik", None) is not None:
             self.ik.close()
         if self.publisher:

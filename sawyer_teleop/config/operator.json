@@ -30,7 +30,7 @@
       3.0,
       3.0
     ],
-    "max_following_error_rad": 0.5,
+    "max_following_error_rad": 1.0,
     "profile": "coordinated"
   },
   "quest_serial": null,

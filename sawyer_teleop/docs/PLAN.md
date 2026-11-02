@@ -8,6 +8,80 @@
 
 ## 当前决定
 
+### Demo 反馈源时间允许最多 50 ms 超前（2026-11-02）
+
+用户明确表示 demo 可接受微小时间误差；本条取代初版仅 collision 的 1 ms 容差。现场进一步提供三路 ROS 超前约 83–85 ms，机器人 NTP 可用；配置 Ubuntu 跟随机器人后 NTP 报 +33.540 / -31.471 ms（不当作 ROS 残差实测）。按本次 demo 意图，B 对 joint / pose / collision 和 cuff 源时间统一允许最多 50 ms 超前，覆盖几十毫秒偏差但不会接受此前 85 / 116 ms 超前。此为有界校验放宽，不做偏差自动学习或固定数值补偿；超过上限继续拒绝，需以实际 ROS 消息年龄验证现场是否满足。
+
+**仅更新 B，A 兼容；需现场重启 B、A 重连 / 校准。** 不新增配置 / 依赖；保留 joint / pose 100 ms、collision 500 ms 过期检查，原始时间戳排序、倒退拒绝、重复不刷新、collision / cuff / robot interlock 和全部运动引用 / 命令 / STOP / 关节保护。接受的负年龄按 0 换算本机 captured 时刻，不产生未来单调时刻、不延长已有运动引用。本条放宽了跨机器时间戳校验；源年龄仍受剩余时钟偏差影响，不能宣称真实源年龄仍具有无误差的 100 ms 保证。保持机器人 NTP 同步有助于维持容差，但 NTP Offset 本身不代表 ROS 反馈年龄。
+
+专项 **14 passed**，完整软件 **935 passed / 23 skipped**，覆盖全部 7,177 输入及旧横移 / 抬手、停手回归；现场微秒、31.471 ms、50 ms 边界、超限 / 85 / 116 ms 拒绝、过期 / 时间倒退 / 重复 / 真实碰撞均覆盖，无本轮失败（保留既有 JUnit 属性 warning）。通过官方脚本新导出并更新 `../../deploy/B-Lab-Ubuntu/`，改动仅 intera_backend.py、DEPLOYMENT.md、manifest；完整旧包备份逐文件校验通过，79 清单文件 / 全部80文件 SHA256 / 大小、Python3.8语法、源码一致性与原固定 env 保留检查通过，FTDI 夹爪端口不变。证据、输入 / 源码 / 参数 / 新旧部署哈希及单项patch在 `../../windows-local/artifacts/feedback-skew-50ms-20261102/verification.json`。
+
+本轮未启动 / 停止 A/B、ROS、串口或真机，未运行 Gazebo / 完整 VR，`release_accepted=false`。下一步操作者复制当前 deploy，按 DEPLOYMENT 重启并验证实际反馈可用与 demo 行为；旧 zip 不包含本次放宽，不应复用。实体动作不由本轮自动执行。
+
+### 固定配置启用现场 FTDI 夹爪串口（2026-11-02）
+
+用户反馈夹爪不动，核对实际 deploy 配置与初始化条件后确认当前 `SAWYER_GRIPPER_PORT` 空值禁用驱动。用户随后提供 Ubuntu 只读枚举：`usb-FTDI_USB__-__Serial_Converter_FTAO9VMQ-if00-port0 -> ../../ttyUSB0`。已将固定副本 `../../windows-local/config/real-b.env` 的夹爪端口设为 `/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTAO9VMQ-if00-port0`，其他字段字节内容不变，后续导出自动沿用。
+
+**仅 B 配置 / 部署文档更新；A/B 运行代码与依赖声明不变。** 已通过官方脚本新导出，再更新 `../../deploy/B-Lab-Ubuntu/`，完整旧包备份先经逐文件 SHA256 核对。实际仅 env、DEPLOYMENT.md 和 manifest 三个文件改变；79 清单文件 SHA256 / 大小、全部 80 文件集合与固定副本一致性通过。证据、现场枚举、配置 / 全部部署新旧哈希在 `../../windows-local/artifacts/gripper-port-config-20261102/verification.json`，无本轮失败；纯配置变更未重跑运行代码测试。
+
+本轮未远程更改实验室文件、打开串口、启动 / 停止 B 或执行实体运动，`release_accepted=false`。设备路径来自现场枚举，不代表串口通信或夹爪身份 / 动作验证。下一步由操作者更新现场 env，另行检查 SDK / 串口权限 / 无独立程序占用并重启 B，A 重连；启动会初始化夹爪并开启扭矩。启动操作详见 DEPLOYMENT，VR / 实体联合验收仍待现场执行。
+
+### 固定实验室 B 配置与后续导出复用（2026-11-02）
+
+用户提供实验室现用 real-b.env 并要求以后一直使用。已逐项按所贴内容保存到源码同级 `../../windows-local/config/real-b.env`：机器人 sawyer.local、ROS_IP / BIND_IP 10.101.119.182、Noetic、工作空间 /home/k23114984/sawyer_ws，Python 自动选择，夹爪端口空值保持禁用。该文件不入源码库，不执行其中内容。现有 deploy 配置与用户内容已逐字节一致，验证后保留。
+
+**仅开发导出工具 / 部署配置规则更新；A/B 运行代码不变。** exporter 默认优先读取固定副本，缺少时仍回退通用示例；`--config` 可显式指定其他配置或示例，错误路径失败退出，不发布半成品。示例保持空地址；仍只导出到新目录。操作规则写入 DEPLOYMENT，源码替换不会覆盖固定副本。
+
+导出 / 迁移专项 **16 passed / 2 skipped**，验证默认复用、显式覆盖、缺失文件失败、通用模板保持及 manifest 配置哈希。通过官方脚本新导出，再同步现有 `../../deploy/B-Lab-Ubuntu/`；本轮实际仅改变 DEPLOYMENT.md 和 manifest。旧包完整备份与逐文件校验通过；79 个清单文件 / 全部 80 文件 SHA256、大小、Python 3.8 语法和固定配置字节一致性通过。证据、源码 / 配置及新旧部署哈希在 `../../windows-local/artifacts/lab-config-persist-20261102/verification.json`，无本轮失败。
+
+没有连接实验室电脑、启动 / 停止 A/B、ROS、串口或真机；现场配置来源为用户粘贴，非远程读取。沿用上一轮碰撞修复软件验证，不代表现场验收，`release_accepted=false`。下一步：操作者使用当前 deploy；现场网络或配置以后若变化，先同步固定副本再导出。
+
+### 将碰撞时间修复更新到现有 deploy（2026-11-02）
+
+用户明确要求直接更新 deploy。已将上一条离线验证通过、官方脚本导出的候选同步到 `../../deploy/B-Lab-Ubuntu/`；先完整备份旧包到 `../../windows-local/artifacts/collision-clock-skew-20261102/previous-deploy/` 并逐文件哈希验证，保留现有 `config/real-b.env` 字节不变。实际变动为 intera_backend.py、DEPLOYMENT.md、manifest，以及随当前已测试源码带入此前用户已要求的 trajectory 默认跟随误差 0.5→1.0 rad；该默认值不是本轮新增决定，A arm 配置仍决定运行值。
+
+重新生成配置对应的 manifest 后，79 个清单文件 SHA256 / 大小、全部 80 文件集合、候选源码一致性与配置保留检查通过；deploy 下仅保留 B-Lab-Ubuntu。证据含新旧全部文件哈希：同目录 `deployment-update-verification.json`。没有启动 / 停止 A/B、ROS、串口或真机；沿用上条软件 931 passed / 23 skipped 结果，未重复无关测试。`release_accepted=false`；本次只更新本机 deploy，实验室复制 / 重启和现场验收仍待操作者执行，启动操作见 DEPLOYMENT。
+
+### collision_source_time_invalid：碰撞状态允许最多 1 ms 超前（2026-11-02）
+
+**仅更新 B（A 兼容）；需现场重启 B、A 重连 / 校准；无新增配置、依赖或协议。** 用户现场只读探针 10 条 `collision=False`，相对 B ROS 时间超前 56–127 us；B 当前 `_accept` 对任何超前源时间均拒绝，因此导致遥操 / Reset 被反馈保护暂停。用户明确要求修改。现仅碰撞状态允许源时间最多超前 1 ms，超过仍报原故障；保留零 / 非有限时间、时间倒退拒绝、重复消息不刷新以及 500 ms 过期和真实碰撞保护。容差内负年龄按 0 计算本机 captured 时刻，原始源时间保留用于排序 / 诊断，不生成未来 captured 时刻、不延长有效期。joint / pose / cuff 和所有运动引用、命令期限、速度 / 关节保护不变。
+
+新增边界 / 现场数值 / 超限 / 过期 / 重复 / 倒退 / 故障恢复 / 真实碰撞及其他反馈不放宽用例；旧代码复现 3 failed / 9 passed，修复专项 12 passed。全套软件 **931 passed / 23 skipped**，包含全部 7,177 输入和旧横移 / 抬手、停手场景。第一次沙箱全套多项失败并中断，原始日志保留；解除沙箱限制后仅运行离线替身 / 本机回环测试通过。Docker Linux engine 管道不存在，未启动引擎，无法进行 Gazebo / 完整 VR 验证；本轮没有启动 / 停止现有 A/B、ROS、串口或真机，`release_accepted=false`。
+
+通过官方导出脚本新建候选包 `../../windows-local/artifacts/collision-clock-skew-20261102/export/B-Lab-Ubuntu/`，不覆盖既有 deploy 或现场配置。导出 79 个清单文件逐项 SHA256 / 大小、Python 3.8 语法、压缩包内容与源码一致性通过。现场输入、参数 / 源码 / 固定输入哈希、改前副本、单项 patch、测试失败 / 成功日志和候选 zip 见同目录 `verification.json`。启动操作仅写在 DEPLOYMENT。下一步：操作者复制候选并保留现场 real-b.env，另行重启 B、只读确认碰撞时间故障解除；隔离仿真 / 完整 VR 与实体运动验收仍待各自授权和执行。
+
+### 跟随误差阈值改为 1.0 rad（2026-11-02）
+
+**仅需更新/重开 A 与本机配置，现有 B 兼容。** 按用户明确要求，将共享轨迹默认值、`config/operator.json` 和 `../windows-local/config/operator.json` 的 `max_following_error_rad` 从 0.5 改为 1.0；适用于普通关节轨迹和 reset。B 既有参数校验允许上限 1.0，接收 A arm 配置后执行该值，因此既有实验室 B 部署包无需为此重导出或覆盖。原生 Cartesian 路径不因该配置新增跟随误差检查。reset 专用速度/加速度比例、0.35 rad 单步跳变保护和期限均不变。
+
+本轮仅软件验证，没有启动/停止任何现有 A/B、ROS、Gazebo、Quest 或真机；运行实例不热加载。重开 A、重新连接/校准后生效。未做物理仿真/完整 VR 或真机验收，`release_accepted=false`。证据与源码/配置/固定输入 SHA256、修改前备份在 `../../windows-local/artifacts/following-limit-1rad-20261102/`。沙箱首次测试因 pytest 临时目录权限失败，指定工作区临时目录后又因硬链接权限失败；提升权限仅运行软件回归，全套软件 927 passed / 23 skipped，包含全部 7,177 输入及旧横移/抬手、停手用例；完整结果见 `pytest-full.log/xml`。下一步在已授权仿真环境确认实际握手阈值、reset 与停止行为，真机仍需另行明确授权。
+
+
+### 更新 deploy 夹爪部署包（2026-11-02）
+
+用户明确要求更新 deploy。已通过 `scripts/export_deployment.py` 先导出新目录，再将旧 `deploy/` 完整备份到 `../../windows-local/artifacts/dynamixel-vr-20261102/previous-deploy/`并逐文件核对备份；新包更新到既有 `../../deploy/B-Lab-Ubuntu/`，deploy 下仅保留 B-Lab-Ubuntu。没有启动或停止任何 A/B、ROS、串口或真机。
+保留原 `config/real-b.env` 内容，缺少时追加空 `SAWYER_GRIPPER_PORT`，避免丢失原地址或自动启用实体夹爪；模板/README纠正“夹爪尚未接入”的旧说明，启动操作见 DEPLOYMENT。新包含驱动、SDK可选依赖、启动配置与夹爪部署说明。
+79个manifest文件逐项SHA256与大小通过、源码对照通过、Python3.8语法及B启动脚本 `bash -n` 通过；更新后再次验证全部80个文件SHA256（含manifest本身），没有遗留多余文件。结果与新旧配置/manifest哈希见同证据目录 `deployment-verification.json`。首次整体改名因Windows提示目录被其他进程占用失败，改用完整备份后逐文件复制，不停止现有进程；最终通过。`release_accepted=false`。
+下一步：将新B目录复制到实验室，在实际B解释器安装Dynamixel SDK并配置真实串口，按原流程重启B、A重连/校准；VR与实体夹爪联合验收仍待现场单独完成。
+
+### VR Trigger 接入实体 Dynamixel 夹爪（2026-11-02）
+
+**B 必须更新，现有 A 控制兼容；使用新增 ticks 录制字段需同时更新 A。** 用户提供 `D:/project/Sawyer/gripper-integration/` 并确认独立夹爪代码已真机实测通过；本条只报告本次集成的软件证据，不将独立实测当作 VR 联合验收。
+入口指定的 `docs/ROG_CODEX_HANDOFF.md` 当前不存在，按现存 README / AGENTS / PLAN / ARCHITECTURE 核对实际源码后接入，没有重建 A/B 或修改官方源码快照。
+
+- 新增独立串口 worker，沿用用户硬件的 ID=1 / 协议2.0 / 57600、模式4、PWM300、速度80、OPEN3766 / CLOSED1024 ticks；不移植阻塞演示。
+- 复用现有 A 的 Trigger <0.3 打开 / >=0.3 闭合，以及 Grip 运动许可、会话代次和目标期限。Standard / Fast follow、Intera Cartesian 四档和 Direct pose 共享 B 驱动；无新协议、APK、机械臂速度或保护期限变动。
+- 最新意图覆盖、重复目标去重、反向抢占、松 Grip / STOP / 断连保持，串口仅由 worker 操作；独立意图看门狗随 B command-timeout，反馈超过150 ms失效或串口故障反馈至 Intera snapshot，使 Bridge 暂停。通信已断时无法保证电机取消目标。
+- 以当前位置替换旧电机目标后才开启扭矩；不开合演示。暂停与正常退出尝试新鲜反馈保持且保留扭矩，不自动释放物体。机械臂原生 STOP 先于夹爪 worker 收尾，避免串口等待延迟机械臂停止。
+- SDK 按包收包等待封顶50 ms、串口写超时50 ms，使用单调时钟；不能据此宣称严格端到端停止上界。保留到位、可能接触与故障区别。新增真实 ticks 状态及 HDF5 ticks/有效性/反馈年龄，不伪造米单位。
+- 串口默认禁用。新增可选依赖 `[gripper]`、B env `SAWYER_GRIPPER_PORT` 与 CLI `--gripper-port`，只在 Intera 显式配置后初始化；启动与退出语义、SDK安装及配置见 [DEPLOYMENT](DEPLOYMENT.md)。导出同时携带该文档；本轮未导出新部署包、未覆盖实验室部署。
+
+验证：全套 **926 passed / 23 skipped（Windows 跳过 Ubuntu 启动器用例）**，包含最新实验室全部7,177输入、旧横移/抬手与停手回归；随后退出顺序补充与夹爪/Intera专项 **33 passed**（与全套有重叠，不相加）。导出/录制/驱动复验49 passed / 2 skipped；B shell语法检查通过。六条提交路径替身验证包含 Standard、Cartesian10/20/50/100、Direct pose，另测反向、去重、hold抢占、旧会话不重放、串口阻塞、失联/反馈过期、部分初始化清理、接触候选/无位移卡滞/开爪超时与录制ticks。
+
+失败保留：首轮新增故障测试漏注入 cuff 状态，已修正；沙箱本机TCP被Windows10013阻止，提升权限后仅回环软件测试通过。第一次全套导出4项失败因测试源副本漏带新增DEPLOYMENT文档；补齐fixture并修正已有docs目录创建后通过。Git Bash语法检查先被沙箱MSYS命名对象权限阻止，提升权限仅作 `bash -n` 通过。原失败XML/日志不删除。
+证据、输入/源码/参数SHA256、测试源码快照和结果在 `../../windows-local/artifacts/dynamixel-vr-20261102/manifest.json`；`release_accepted=false`。本轮无 ROS/Gazebo/真实Quest/串口/真机运行。
+下一步：实验室B按DEPLOYMENT安装依赖、核对实际稳定串口并重启B；A重连/校准，现场另行验证VR与夹爪联合开闭、夹物、松手/STOP/断连、各实际运动选项与录制，不把本轮替身测试算作实体验收。
+
 ### 加回 Stop-B.cmd（2026-10-30）
 
 **仅更新 Windows 入口（A、B 代码不变）。** 用户要求恢复独立停止入口：根目录新增 `Stop-B.cmd`（ASCII + CRLF），调用 `windows_sim_launcher.py --stop`，与 `Start-B.cmd --stop` 相同。

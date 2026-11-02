@@ -42,6 +42,8 @@ def _run_bridge(args):
 
 def _serve_bridge(args, journal):
     from .server import BridgeServer
+    if getattr(args, 'gripper_port', None) and args.backend != 'intera':
+        raise ValueError('--gripper-port requires --backend intera')
     if args.backend in ("intera", "gazebo"):
         # This node's ROS files live only in RAM; do not alter any existing lab ROS node.
         ram = Path("/dev/shm")
@@ -52,7 +54,9 @@ def _serve_bridge(args, journal):
         os.environ["ROS_LOG_DIR"] = logdir.name
         if args.backend == "intera":
             from .intera_backend import InteraBackend
-            backend = InteraBackend(args.tip, args.state_timeout)
+            backend = InteraBackend(args.tip, args.state_timeout,
+                                   gripper_port=args.gripper_port,
+                                   gripper_command_timeout=args.command_timeout)
         else:
             from .gazebo_backend import GazeboBackend
             backend = GazeboBackend(args.tip, args.state_timeout)
@@ -125,6 +129,7 @@ def main():
                         help="Maximum source feedback reference age, independent of --state-timeout")
     bridge.add_argument("--hz", type=float, default=100)
     bridge.add_argument("--tip", default="right_hand")
+    bridge.add_argument("--gripper-port", help="Opt-in external Dynamixel serial device on B")
     bridge.add_argument("--status-file", help="Optional read-only status snapshot; use /dev/shm on B")
     logs = bridge.add_mutually_exclusive_group()
     logs.add_argument("--feedback-log", help="Rotating JSONL diagnostics path; enabled by default for real Intera B")

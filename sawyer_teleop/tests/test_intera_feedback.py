@@ -105,6 +105,84 @@ class InteraFeedbackTests(unittest.TestCase):
         self.b.robot['estop'] = True
         self.assertEqual(self.b.snapshot()['fault'], 'robot_not_ready')
 
+    def collision(self, timestamp, value=False):
+        return NS(header=NS(stamp=stamp(timestamp)), collision_state=value)
+
+    def test_collision_small_future_skew_is_bounded_and_capture_is_not_future(self):
+        self.b._cuff(self.cuff())
+        # Small lab skew and the demo's explicit 50 ms boundary.
+        for offset in (.000056, .000127, .001, .031471, .05):
+            with self.subTest(offset=offset):
+                self.b._collision(self.collision(1000 + offset))
+                self.assertTrue(self.b.snapshot()['valid'])
+                self.assertEqual(self.b.stamps['collision'], 1000 + offset)
+                self.assertEqual(self.b.captured['collision'], 10_000_000_000)
+        # A tolerated future stamp must not extend the freshness window.
+        for name in ('joint', 'pose', 'robot'):
+            self.b.captured[name] = self.b.received[name] = 10_500_000_001
+        with patch('sawyer_teleop.intera_backend.ns', return_value=10_500_000_001):
+            self.assertEqual(self.b.snapshot()['fault'], 'collision_stale')
+
+    def test_collision_bad_time_does_not_replace_or_refresh_valid_state(self):
+        self.b._collision(self.collision(1000))
+        original = (self.b.stamps['collision'], self.b.received['collision'],
+                    self.b.captured['collision'])
+        for timestamp in (0, float('nan'), float('inf'), 1000.050001, 999.499999):
+            with self.subTest(timestamp=timestamp):
+                self.b._collision(self.collision(timestamp, True))
+                self.assertEqual(self.b.invalid['collision'], 'collision_source_time_invalid')
+                self.assertFalse(self.b.collision)
+                self.assertEqual(original, (self.b.stamps['collision'],
+                                 self.b.received['collision'], self.b.captured['collision']))
+        self.b._collision(self.collision(1000.0001))
+        self.assertNotIn('collision', self.b.invalid)
+
+    def test_collision_duplicate_regression_and_true_collision_still_block(self):
+        self.b._cuff(self.cuff())
+        self.b._collision(self.collision(1000.0001))
+        with patch('sawyer_teleop.intera_backend.ns', return_value=10_100_000_000):
+            self.b._collision(self.collision(1000.0001))
+        self.assertEqual(self.b.received['collision'], 10_000_000_000)
+        self.b._collision(self.collision(1000))
+        self.assertEqual(self.b.snapshot()['fault'], 'collision_source_time_regressed')
+        self.b._collision(self.collision(1000.0002, True))
+        self.assertEqual(self.b.snapshot()['fault'], 'robot_collision')
+
+    def test_future_skew_above_50ms_is_rejected_for_joint_pose_and_cuff(self):
+        self.b._accept('joint', 1000.050001, lambda: self.fail('accepted future joint'))
+        self.b._endpoint(self.endpoint(timestamp=1000.050001))
+        self.b._cuff(self.cuff(timestamp=1000.050001))
+        for name in ('joint', 'pose', 'cuff'):
+            self.assertEqual(self.b.invalid[name], name + '_source_time_invalid')
+
+    def test_demo_joint_pose_and_cuff_accept_50ms_but_keep_raw_stamps(self):
+        for offset in (.0001, .031471, .05):
+            with self.subTest(offset=offset):
+                timestamp = 1000 + offset
+                self.b._joint(NS(name=['right_j%d' % n for n in range(7)],
+                                 position=[0.] * 7, velocity=[0.] * 7,
+                                 header=NS(stamp=stamp(timestamp))))
+                self.b._endpoint(self.endpoint(timestamp=timestamp))
+                self.b._cuff(self.cuff(timestamp=timestamp))
+                self.b._collision(self.collision(timestamp))
+                sample = self.b.snapshot()
+                self.assertTrue(sample['valid'], sample['fault'])
+                self.assertEqual(sample['captured_ns'], 10_000_000_000)
+                for name in ('joint', 'pose', 'cuff', 'collision'):
+                    self.assertEqual(self.b.stamps[name], timestamp)
+        # No extra 50 ms is added to the local freshness window.
+        self.b.captured['pose'] = self.b.received['robot'] = 10_100_000_001
+        with patch('sawyer_teleop.intera_backend.ns', return_value=10_100_000_001):
+            self.assertEqual(self.b.snapshot()['fault'], 'joint_stale')
+
+    def test_demo_does_not_accept_historical_85ms_skew_or_old_feedback(self):
+        for name in ('joint', 'pose', 'collision'):
+            for timestamp in (1000.085, 1000.116278,
+                              999.899999 if name != 'collision' else 999.499999):
+                with self.subTest(name=name, timestamp=timestamp):
+                    self.b._accept(name, timestamp, lambda: self.fail('accepted bad time'))
+                    self.assertEqual(self.b.invalid[name], name + '_source_time_invalid')
+
     def test_raw_estop_codes_and_all_invalid_fields_remain_in_diagnostics(self):
         self.b._cuff(self.cuff())
         self.b._robot(NS(enabled=False, ready=False, homed=True, lowVoltage=False,

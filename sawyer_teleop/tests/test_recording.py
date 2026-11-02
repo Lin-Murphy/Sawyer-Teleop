@@ -109,6 +109,24 @@ def test_saved_telemetry_preserves_all_rows_precision_and_partial_tail(tmp_path)
     assert [json.loads(line) for line in (episode.result/"events.jsonl").read_text(encoding="utf-8").splitlines()] == events
 
 
+def test_dynamixel_ticks_are_recorded_without_claiming_metric_finger_distance(tmp_path):
+    episode = Episode(tmp_path, {})
+    episode.state({"session": "ticks", "clock_offset_ns": 0, "clock_uncertainty_ns": 0,
+                   "sample": {"valid": True, "seq": 1, "captured_ns": 123,
+                              "q": [0.]*7, "dq": [0.]*7,
+                              "pose": {"p": [0.]*3, "q": [0., 0., 0., 1.]},
+                              "gripper": {"valid": True, "position_ticks": -23,
+                                          "target_ticks": 1024, "age_ms": 12.5}}})
+    assert episode.finish(True).wait(5)
+    assert episode.error is None
+    with h5py.File(episode.result/"raw.hdf5") as data:
+        assert data['states/gripper_position_ticks'][0] == -23
+        assert data['states/gripper_ticks_valid'][0]
+        assert data['states/gripper_target_ticks'][0] == 1024
+        assert data['states/gripper_feedback_age_ms'][0] == 12.5
+        assert not data['states/gripper_valid'][0]
+
+
 def test_telemetry_write_failure_never_marks_saved_capture_complete(tmp_path, monkeypatch):
     def fail(*args, **kwargs):
         raise OSError("disk_full_during_rows")

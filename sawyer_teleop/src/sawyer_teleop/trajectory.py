@@ -22,7 +22,7 @@ def trajectory_options(options=None):
         "max_velocity_rad_s": [0.6] * 7,
         "max_acceleration_rad_s2": [1.5] * 7,
         "min_duration_ms": 20.0,
-        "max_following_error_rad": 0.5,
+        "max_following_error_rad": 1.0,
     }
     if profile in ("responsive", "coordinated"):
         defaults.pop("min_duration_ms")

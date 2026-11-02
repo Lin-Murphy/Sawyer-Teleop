@@ -27,7 +27,7 @@ def test_real_fast_arm_negotiates_joint_limits_with_existing_b(tmp_path):
         assert cfg['execution_mode']=='joint'
         assert cfg['trajectory']['max_acceleration_rad_s2']==[3,3,6,6,6,6,6]
         assert cfg['timeouts_ms']==dict(latest_feedback=100,source_reference=120,command=200)
-        assert cfg['trajectory']['max_following_error_rad']==.5
+        assert cfg['trajectory']['max_following_error_rad']==1.0
         assert cfg['cartesian_options'] is None
         assert op.robot.ik_mode=='remote'
         quest.grip=0

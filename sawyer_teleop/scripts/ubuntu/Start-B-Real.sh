@@ -19,6 +19,7 @@ fail() { echo "Real B: $*" >&2; exit 1; }
 [[ -f "$config" ]] || fail "Missing $config. Copy config/real-b.env.example to config/real-b.env and fill the addresses."
 # Deliberately local, user-authored shell configuration.
 source "$config"
+export SAWYER_GRIPPER_PORT="${SAWYER_GRIPPER_PORT:-}"
 cd "$root"
 : "${SAWYER_ROBOT_HOST:?Fill SAWYER_ROBOT_HOST in real-b.env}"
 : "${SAWYER_ROS_IP:?Fill SAWYER_ROS_IP in real-b.env}"
@@ -65,12 +66,14 @@ if [[ "$("$b_python" -c 'import sys; print("%s.%s" % sys.version_info[:2])')" ==
   export PYTHONPATH="$planner:$PYTHONPATH"
 fi
 "$b_python" - <<'PY'
-import sys
+import os, sys
 if sys.version_info < (3, 8):
     raise SystemExit('B needs Python >= 3.8 with the lab ROS packages')
 try:
     import rospy, intera_core_msgs.msg, intera_core_msgs.srv, ruckig
     from sawyer_teleop import cli, intera_backend
+    if os.environ.get('SAWYER_GRIPPER_PORT'):
+        import dynamixel_sdk
     if ruckig.__version__ != '0.12.2':
         raise ImportError('ruckig must be 0.12.2')
 except ImportError as exc:
@@ -95,9 +98,13 @@ PY
 # Lab-confirmed Reset target; A reads it at handshake. Loading a parameter never moves the arm.
 rosparam load "$neutral_pose"
 echo 'Starting real B bridge. Ctrl+C stops this bridge. Robot enabling follows the lab procedure.'
+gripper_args=()
+if [[ -n "$SAWYER_GRIPPER_PORT" ]]; then
+  gripper_args=(--gripper-port "$SAWYER_GRIPPER_PORT")
+fi
 # Reference/command 0.25 s (was 0.12/0.2), aligned with the Gazebo 250 ms profile:
 # 2026-10-29 user prefers occasional lag over pauses that require re-gripping.
 exec "$b_python" -m sawyer_teleop.cli bridge --backend intera --host "$SAWYER_BIND_IP" \
   --control-port 8765 --ik-port 8766 --state-timeout 0.1 --reference-timeout 0.25 \
   --command-timeout 0.25 --hz 100 --tip right_hand \
-  --status-file "/dev/shm/sawyer-teleop-$(id -u)/intera-b.json"
+  --status-file "/dev/shm/sawyer-teleop-$(id -u)/intera-b.json" "${gripper_args[@]}"

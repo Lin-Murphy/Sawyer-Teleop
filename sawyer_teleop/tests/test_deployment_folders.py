@@ -29,7 +29,7 @@ def source(tmp_path, request):
     # Use real code, launchers, APK and wheel; stub only the large Windows runtime and image.
     for name in ('src/sawyer_teleop', 'scripts', 'config', 'runtime-wheels', 'packaging/B-Lab-Ubuntu'):
         shutil.copytree(ROOT / name, root / name, ignore=export.IGNORE)
-    for name in ('pyproject.toml', 'quest/apk.json', 'quest/sawyer-quest-input-120hz.apk'):
+    for name in ('pyproject.toml', 'quest/apk.json', 'quest/sawyer-quest-input-120hz.apk', 'docs/DEPLOYMENT.md'):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, path)
@@ -83,6 +83,7 @@ def test_export_contains_only_lab_b_and_survives_relocation(source, tmp_path):
     assert (b / 'config/lab-neutral-pose.yaml').read_bytes() == (ROOT / 'config/lab-neutral-pose.yaml').read_bytes()
     assert (b / 'scripts/probe_intera_ik.py').is_file()
     assert (b / 'docs/DEPLOYMENT_B.md').read_bytes() == (b / 'README.md').read_bytes()
+    assert (b / 'docs/DEPLOYMENT.md').read_bytes() == (ROOT / 'docs/DEPLOYMENT.md').read_bytes()
     manifest = json.loads((b / 'DEPLOYMENT-MANIFEST.json').read_text())
     assert manifest['role'] == 'B-Lab-Ubuntu' and manifest['release_accepted'] is False
     for name, item in manifest['files'].items():
@@ -134,6 +135,26 @@ def test_export_never_overwrites_an_existing_deployment(source, tmp_path):
         export.build(target, root=source)
     assert sentinel.read_text() == 'preserve'
     assert list(target.iterdir()) == [sentinel]
+
+
+def test_export_preserves_persistent_lab_config_and_allows_explicit_override(source, tmp_path):
+    saved = source.parent / 'windows-local/config/real-b.env'
+    saved.parent.mkdir(parents=True)
+    contents = b'SAWYER_ROBOT_HOST="lab.local"\nSAWYER_WORKSPACE="/home/lab/sawyer_ws"\nSAWYER_GRIPPER_PORT=""\n'
+    saved.write_bytes(contents)
+    export.build(tmp_path / 'lab export', root=source)
+    b = tmp_path / 'lab export/B-Lab-Ubuntu'
+    assert (b / 'config/real-b.env').read_bytes() == contents
+    manifest = json.loads((b / 'DEPLOYMENT-MANIFEST.json').read_text())
+    assert manifest['files']['config/real-b.env']['sha256'] == export.sha256(saved)
+    assert (b / 'config/real-b.env.example').read_bytes() == (source / 'config/real-b.env.example').read_bytes()
+    assert saved.read_bytes() == contents
+    # Explicit template selection can still produce a generic package.
+    export.build(tmp_path / 'generic export', root=source, config=source / 'config/real-b.env.example')
+    assert (tmp_path / 'generic export/B-Lab-Ubuntu/config/real-b.env').read_bytes() == (source / 'config/real-b.env.example').read_bytes()
+    with pytest.raises(FileNotFoundError):
+        export.build(tmp_path / 'missing config export', root=source, config=tmp_path / 'missing.env')
+    assert not (tmp_path / 'missing config export').exists()
 
 
 @pytest.mark.parametrize('resource', ['runtime-wheels/python38/ruckig.cpython-38-x86_64-linux-gnu.so',

@@ -17,6 +17,7 @@ operator = [
   "opencv-python==4.8.1.78",
 ]
 test = ["pytest>=7,<9"]
+gripper = ["dynamixel-sdk"]
 
 [project.scripts]
 sawyer-teleop = "sawyer_teleop.cli:main"
