@@ -1,5 +1,240 @@
 # 实验室 B 部署补充
 
+## 再次出现反馈时间错误：现场快速恢复命令
+
+适用：重启机械臂后出现 `feedback_latest_expired` 或 `*_source_time_invalid`，
+且本机已经配置好跟随 `sawyer.local` 的 NTP。以下是恢复尝试；相同页面错误也可能
+有其他原因，不能只凭错误名称认定时钟故障。
+
+### 1. 断开 A，停止当前 B
+
+在 A 页面断开连接；到自己启动 B 的终端按 `Ctrl+C`，等待退出。
+不要停止其他人的实例，也不要在运动过程中调整系统时间。
+
+### 2. 重新触发时间同步
+
+```bash
+sudo systemctl restart systemd-timesyncd
+```
+
+等约一分钟，再检查：
+
+```bash
+timedatectl timesync-status
+```
+
+确认 Server 仍为 `sawyer.local`（本次现场 IP 为 `10.101.119.178`），
+Poll interval 在 16–32 秒，Offset 已明显收敛。配置已保存在系统中，
+**不需要每次重写 NTP 配置，也不需要安装 chrony / ntpdate**。
+等满一分钟或显示 synchronized 并不自动代表 ROS 反馈已经健康。
+
+### 3. 启动最新版 B
+
+进入本机实际使用的最新版 B 目录；以下目录名是本次现场示例，复制新包后应改为新路径：
+
+```bash
+cd /home/k23114984/Lin/B-Lab-Ubuntu-20261102
+bash Start-B.sh
+```
+
+不要只照抄旧目录名而启动旧包。启用夹爪串口时，启动 B 会初始化夹爪并开启扭矩。
+检查 B 没有启动异常，新反馈持续有效后，再让 A 重新连接 / 校准。
+
+### 4. 若仍失败，收集这些输出
+
+保持 B 运行，在另一个终端执行（不需要加载 ROS 环境）：
+
+```bash
+timedatectl timesync-status
+tail -n 1 ~/.local/state/sawyer-teleop/feedback.jsonl
+```
+
+把这两部分、A 页面错误和 B 启动输出一起提供，不反复 Reset 或继续扩大容差。
+日志需是当前运行实例的最新记录；`sample.valid=true`、`fault=null`、seq 持续增长
+才说明 B 实际反馈在恢复。若仍是源时间错误，按下节完整手册测量三路 ROS 源年龄；
+若 B 健康而 A 仍过期，再查 A 的接收与传输路径。
+
+## 重启机械臂后反馈过期：排查与恢复手册
+
+记录日期：2026-11-02。此节归纳本次代码检查和用户现场输出，不表示已经完成
+自动恢复功能或实体运动验收。以后遇到相同错误，先核对当前版本和新证据。
+
+### 问题是什么
+
+A 能连接 B 的 TCP 端口，不代表 B 已拿到可用于控制的机器人反馈。
+本次机器人与 Ubuntu B 的时间差导致 B 拒绝 joint / pose / collision 消息，
+A 随后报 `feedback_latest_expired`；不应把这个表层错误直接解释为网络延迟。
+
+| 证据 | 本次含义 |
+| --- | --- |
+| `*_source_time_invalid` | 源时间零值、非有限、过旧或超前超过当前容差；必须测量年龄才能区分 |
+| `collision_source_time_invalid` | 碰撞消息时间无效，不等于真的碰撞；真实碰撞报 `robot_collision` |
+| `seq:0`、`captured_ns:0`、q / pose 为 null | 尚未接受有效运动反馈；巨大 age 是零时间基准造成的派生数值 |
+| seq 只到 1，最后有效反馈约 28 秒前 | 后续消息持续被拒绝，并非只丢了一帧 |
+| `gripper.supported:true, valid:true` | 夹爪驱动已接入并有有效反馈，不代表已提交开合动作 |
+| `gripper.supported:false` | 当前 B 没启用夹爪；另查运行目录、启动参数与 env |
+
+当前 A 的反馈检查先检查年龄、再检查 sample.valid，因此源反馈无效的详细原因
+可能被 `feedback_latest_expired` 遮住；应直接看 B 日志中的 sample.fault 和
+feedback_diagnostics.invalid。
+
+### 已经改过什么，哪些没有改
+
+- **代码 / deploy 已改**：B 的 joint / pose / collision / cuff 源时间允许最多
+  50 ms 超前。关节 / 位姿 100 ms、碰撞 500 ms 的旧反馈检查保留；原始时间排序、
+  重复不刷新、STOP / 碰撞 / 手导 / 关节保护保留。负年龄不会生成未来的本机 capture。
+  这是允许有界时钟误差，不是精确对时，不能声称真实采集年龄完全没有测量误差。
+- **Ubuntu 系统已由用户修改**：B 使用 `sawyer.local` 做 NTP 时间源；轮询
+  16–32 秒。调整 NTP 本身没有修改 Python 代码。
+- **尚未实现**：启动时等待多路反馈持续健康再宣布就绪、直接显示各路源年龄、
+  机器人重启后自动确认恢复。当前启动脚本只检查本地依赖、ROS master 与 IK 服务，
+  不能据“端口已监听”就宣称反馈健康。
+- **没有采用**：1 秒容差或禁用源时间校验。允许很大的超前会掩盖滞留的旧反馈。
+
+固定网络与串口配置见下一节。NTP 文件在 Ubuntu 的 `/etc/systemd/`，不会随 deploy
+或 real-b.env 一起迁移。新终端的 ROS 环境也不会因 B 已启动而自动加载。
+
+### 每次故障先收集证据（只读）
+
+先让 A 保持断开，不反复 Reset。以下检查不打开串口、不使能、不发送运动：
+
+```bash
+hostname
+ip -br -4 addr
+timedatectl timesync-status
+cat /etc/systemd/timesyncd.conf.d/90-sawyer.conf
+tail -n 1 ~/.local/state/sawyer-teleop/feedback.jsonl
+```
+
+在实际准备启动的 B 目录中另查：
+
+```bash
+pwd
+grep -E '^SAWYER_(ROBOT_HOST|ROS_IP|BIND_IP|WORKSPACE|B_PYTHON|GRIPPER_PORT)=' config/real-b.env
+grep 'FEEDBACK_FUTURE_TOLERANCE_S' src/sawyer_teleop/intera_backend.py
+```
+
+核对日志 utc 是否新鲜；重启后 run_id / pid 应对应新实例。若怀疑实际启动的是另一份包，
+对仍存在的日志 pid 使用 `readlink -f /proc/实际PID/cwd` 确认目录，不只检查磁盘上任意副本。
+不要把此前成功的日志当作当前状态。
+
+如果三路仍报源时间错误，在同一个新终端先加载环境（下面为本次实验室路径）：
+
+```bash
+source /opt/ros/noetic/setup.bash &&
+source /home/k23114984/sawyer_ws/devel/setup.bash &&
+export ROS_MASTER_URI="http://sawyer.local:11311" &&
+export ROS_IP="10.101.119.182" &&
+unset ROS_HOSTNAME
+```
+
+然后直接测量消息到达时的源年龄，而不是先 echo 消息、再手工运行 date：
+
+```bash
+timeout 10s python3 - <<'PY'
+import rospy
+from sensor_msgs.msg import JointState
+from intera_core_msgs.msg import EndpointState, CollisionDetectionState
+
+rospy.init_node("feedback_time_probe", anonymous=True)
+counts = {}
+
+def callback(msg, name):
+    counts[name] = counts.get(name, 0) + 1
+    if counts[name] <= 3:
+        now = rospy.Time.now().to_sec()
+        stamp = msg.header.stamp.to_sec()
+        print("%s age_ms=%.3f stamp=%.9f now=%.9f" %
+              (name, (now-stamp)*1000, stamp, now), flush=True)
+
+subs = [
+    rospy.Subscriber("/robot/joint_states", JointState, callback, callback_args="joint"),
+    rospy.Subscriber("/robot/limb/right/endpoint_state", EndpointState, callback, callback_args="pose"),
+    rospy.Subscriber("/robot/limb/right/collision_detection_state", CollisionDetectionState,
+                     callback, callback_args="collision"),
+]
+rospy.Timer(rospy.Duration(5), lambda _: rospy.signal_shutdown("done"), oneshot=True)
+rospy.spin()
+PY
+```
+
+负 age 表示源时间超前；当前 joint / pose 应在 -50～100 ms、collision 应在
+-50～500 ms 内，此外仍须通过值、排序及机器人状态检查。若运行的代码版本不同，
+先查实际阈值。`invalid ROS_IP`、`http://:11311` 表示探针终端环境没加载好，
+不能据此判断运行中的 B 断连。
+
+### 本次恢复方法：让 B 跟机器人同步
+
+本次用户的只读 NTP 查询确认机器人 `10.101.119.178 (sawyer.local)` 提供服务。
+其他机器人 / 环境需重新核对，不猜测设备地址或默认安装时间服务。
+对已存在的 90-sawyer.conf 先备份。保持 A 断开，由操作者停止自己运行的 B，
+再修改系统时间同步，避免控制过程中调整时钟：
+
+```bash
+sudo mkdir -p /etc/systemd/timesyncd.conf.d
+sudo cp -a /etc/systemd/timesyncd.conf.d/90-sawyer.conf /etc/systemd/timesyncd.conf.d/90-sawyer.conf.bak
+printf '[Time]\nNTP=\nNTP=sawyer.local\nFallbackNTP=\nPollIntervalMinSec=16s\nPollIntervalMaxSec=32s\n' | sudo tee /etc/systemd/timesyncd.conf.d/90-sawyer.conf
+sudo systemctl restart systemd-timesyncd
+```
+
+首次安装没有原文件时跳过 cp，不必因备份不存在而停下。这里采用单行 printf，
+避免先前粘贴 `<<'EOF'` 漏引号导致终端一直显示 `>` 的问题；遇到这种情况按 Ctrl+C
+退出再完整输入。配置项说明见 [systemd 官方文档](https://www.freedesktop.org/software/systemd/man/247/timesyncd.conf.html)。
+
+等约一分钟，再查看 `timedatectl timesync-status`，确认 Server 指向机器人，
+Poll interval 在 16–32 秒，并复测 ROS 源年龄。若尚未稳定，保留新日志继续定位；
+不要因已等满一分钟就认定成功，也不要自动扩大容差。
+
+本次最终用户输出为 Offset=-111 us、Delay=215 us、Jitter=41 us、2 个采样包，
+说明当时 NTP 状态明显改善；这不是长期稳定或完整遥操验收的证据。
+
+### 恢复完成的判据与启动顺序
+
+1. 当前 IP / 工作空间 / 串口配置与实际电脑匹配，确认使用最新版 B。
+2. NTP 正确且 ROS 三路源年龄满足当前阈值，不只看 synchronized=yes。
+3. 由操作者启动 `bash Start-B.sh`；启用串口时会初始化夹爪并开启扭矩。
+4. 比较几条新反馈日志：seq 持续增长、captured_ns 更新、sample.valid=true、fault=null。
+   新日志连续健康后，A 再连接 / 校准；实体动作按现场授权执行。
+5. 若 B 已有效而 A 仍过期，再调查 A 接收间隔、时钟估计不确定度与传输 / 排队，
+   不继续把所有错误归为 NTP。若夹爪 unsupported，独立检查其配置。
+
+配置保存后 Ubuntu 重启仍会加载，但机器人重启可能再次造成短暂时间变化，
+不能保证永不故障。当前手册提供恢复路径，没有实现启动自动健康门或自动恢复。
+
+### 可直接复用的排障 prompt
+
+```text
+请接手 Sawyer 重启后遥操反馈失效问题，按现有证据定位并给出具体恢复步骤。
+项目在 D:\project\Sawyer\Sawyer-Workspace\sawyer_teleop。
+先遵守 AGENTS.md；若入口指定的 ROG_CODEX_HANDOFF.md 不存在，说明后读取现存
+AGENTS / docs/PLAN.md 最新决定，以及 docs/DEPLOYMENT.md 的“重启机械臂后反馈过期”手册。
+
+已知历史：Ubuntu B 为 rll3-OptiPlex-7050 / 10.101.119.182，机器人 sawyer.local
+此前解析为 10.101.119.178，ROS Noetic，工作空间 /home/k23114984/sawyer_ws。
+这些值必须与当前输出核对，不能假定地址、路径和运行版本未变。
+固定配置位于源码同级 windows-local/config/real-b.env，导出默认沿用它；保留现场配置。
+当前源码 B 允许最多50ms源时间超前；joint/pose旧反馈100ms、collision500ms。
+曾有83–85ms超前，导致三路 source_time_invalid，再被A显示为feedback_latest_expired。
+Ubuntu曾配置 /etc/systemd/timesyncd.conf.d/90-sawyer.conf：
+[Time]，NTP= 清空列表后 NTP=sawyer.local，FallbackNTP=，
+PollIntervalMinSec=16s，PollIntervalMaxSec=32s。NTP不是deploy的一部分。
+
+先只读收集当前网络、timesync状态/配置、B实际进程目录和版本、real-b.env、
+最新feedback.jsonl（核对utc/run_id/pid），必要时测三路ROS消息到达时的age_ms。
+新终端先完整加载ROS环境；给出一次可复制的成组命令，避免反复追问已有信息。
+区分源时间无效、源反馈中断、A传输/排队、旧部署/配置和夹爪未启用。
+不要把NTP Offset直接当ROS年龄；captured_ns=0产生巨大age不代表网络延迟。
+若证据仍是时钟问题，指导操作者备份配置、停止自己的B，再恢复NTP并复测；
+给出B日志持续健康后才连接A的步骤。若不是时钟问题，按新证据查对应路径。
+当前代码没有“启动等待多路反馈持续健康”的自动门，不能说它已经实现。
+不自动操作真机、打开串口、使能/运动或停止别人的实例；不禁用时间/STOP/碰撞/
+关节保护，不自动把容差改为1s。代码与本地部署更新可在定位后按明确范围实施，
+保留配置、备份与校验，进度写PLAN，启动步骤写DEPLOYMENT，软件结果不当真机验收。
+
+下面是本次最新报错和终端输出：
+【粘贴页面报错、B启动输出、timesync-status和最新反馈日志】
+```
+
 ## 固定实验室配置（2026-11-02）
 
 用户从实验室现有配置确认：机器人 `sawyer.local`；B 的 ROS_IP / BIND_IP
