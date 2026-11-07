@@ -1,12 +1,10 @@
-import {RobotView,feedbackMetric} from './robot.js';
+import {feedbackMetric} from './robot.js';
 const $=id=>document.getElementById(id), text=(id,value)=>$(id).textContent=value;
 const client=crypto.randomUUID(), storageKey='sawyer-web-token:'+location.port;
 let token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem(storageKey)||'';
 if(token){sessionStorage.setItem(storageKey,token);history.replaceState(null,'',location.pathname);}
 let sequence=0,last=null,lastOK=0,initialized=false,events=[],eventSeq=0,busy=0,lastBatch='',lastProfileRequest=null;
 let frozen=false,networkOK=false;
-const robot=new RobotView($('robotCanvas'),$('viewOverlay'),$('viewStatus'));
-for(let i=0;i<7;i++){const d=document.createElement('div');d.className='joint';const label=document.createElement('span');label.textContent='J'+i+' · rad';const value=document.createElement('strong');value.id='joint'+i;value.textContent='—';d.append(label,value);$('joints').append(d);}
 function notice(message){text('notice',message||'');$('notice').hidden=!message;}
 async function api(path,body,timeout=2500){
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
@@ -56,7 +54,6 @@ function render(){
   ['inputHz','targetHz','rtt','submissionHz','feedbackHz'].forEach((id,i)=>text(id,localFresh?fmt([s.input_rate?.hz,s.target_rate?.hz,s.rtt_ms,s.target_rate?.submission_hz,s.target_rate?.feedback_hz][i]):'—'));
   const feedback=feedbackMetric(s,last.phase,localFresh);text('feedbackAge',feedback.value);text('feedbackUnit',feedback.unit);$('feedbackAge').title=feedback.detail;$('feedbackUnit').title=feedback.detail;
   $('feedbackAge').classList.toggle('bad',!feedbackFresh||!!timing.fault);
-  for(let i=0;i<7;i++)text('joint'+i,feedbackFresh&&s.joints?fmt(s.joints[i],3):'—');
   const q=localFresh?s.quest||{}:{};
   text('stream','Quest data: '+(q.fresh?'Receiving':q.received_ns?'Interrupted':'Waiting'));
   flag('headApp','App',q.focused,'Foreground','Background');flag('headMount','Worn',q.mounted,'Yes','No');flag('headTracking','Head',q.head_tracked,'Tracked','Lost');
@@ -88,20 +85,57 @@ function render(){
   const normalRelease=lastPauseReason==='released'||/^Grip released; (recording continues|not recording)$/.test(lastPauseReason);
   $('pauseReason').classList.toggle('pause-fault',Boolean(lastPauseReason)&&!normalRelease);
   text('pauseDetails',lastPause?JSON.stringify(lastPause,null,2):'No pause recorded.');
-  if(!localFresh)robot.stale();
+  renderCameras(localFresh?last.cameras||[]:[]);
+}
+const cameraViews=new Map();
+function cameraView(info){
+  let view=cameraViews.get(info.name);if(view)return view;
+  const figure=document.createElement('figure'),frame=document.createElement('div'),img=document.createElement('img'),overlay=document.createElement('div'),caption=document.createElement('figcaption'),label=document.createElement('strong'),state=document.createElement('span');
+  figure.className='camera';frame.className='camera-frame';overlay.className='camera-overlay';img.alt=info.label;img.hidden=true;
+  frame.append(img,overlay);caption.append(label,state);figure.append(frame,caption);$('cameraGrid').append(figure);
+  view={info,img,overlay,label,state,url:'',running:false};cameraViews.set(info.name,view);return view;
+}
+const delay=ms=>new Promise(r=>setTimeout(r,ms));
+async function cameraLoop(view){
+  view.running=true;
+  while(!frozen){
+    if(document.hidden||!networkOK||!view.info.live){await delay(400);continue;}
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),2000);
+    try{
+      const response=await fetch('/api/camera?name='+encodeURIComponent(view.info.name),{headers:{'X-Sawyer-Token':token,'X-Sawyer-Client':client},signal:controller.signal,cache:'no-store'});
+      if(!response.ok)throw new Error('Camera unavailable');
+      const url=URL.createObjectURL(await response.blob());
+      await new Promise(resolve=>{view.img.onload=view.img.onerror=resolve;view.img.src=url;});
+      if(view.url)URL.revokeObjectURL(view.url);view.url=url;view.img.hidden=false;view.overlay.hidden=true;
+      await delay(25);
+    }catch(e){await delay(500);}
+    finally{clearTimeout(timer);}
+  }
+  view.running=false;
+}
+function renderCameras(list){
+  if(!list.length&&!cameraViews.size){$('cameraGrid').textContent='No cameras configured.';return;}
+  for(const info of list){
+    const view=cameraView(info);view.info=info;
+    view.label.textContent=info.label;
+    const exposure=info.live&&info.exposure,badExposure=exposure&&exposure.state!=='ok';
+    view.state.textContent=info.live?fmt(info.fps)+' FPS · '+info.width+'×'+info.height+(badExposure?' · '+(exposure.state==='over'?'Overexposed':'Too dark'):''):'No signal';
+    view.state.title=exposure?`Brightness median ${fmt(exposure.p50,0)} · dark ${fmt(exposure.dark_pct)}% · clipped ${fmt(exposure.channel_clip_pct)}% · RGB mean ${exposure.rgb_mean.map(v=>fmt(v,0)).join('/')}`:'';
+    view.state.classList.toggle('bad',!info.live||!!badExposure);
+    if(!info.live){view.img.hidden=true;view.overlay.hidden=false;view.overlay.textContent=info.error||'Waiting for camera…';}
+    if(!view.running)cameraLoop(view);
+  }
 }
 function renderLogs(){if($('pauseLog').checked)return;const area=$('logs'),position=area.scrollTop,filter=$('logFilter').value;const visible=events.filter(e=>filter==='all'||filter==='warnings'&&['warning','error'].includes(e.kind)||filter==='events'&&e.kind!=='motion');area.replaceChildren(...visible.map(e=>{const row=document.createElement('div');row.className='log-line '+(['event','warning','error','motion'].includes(e.kind)?e.kind:'event');const t=document.createElement('span'),body=document.createElement('span');t.className='log-time';t.textContent=e.time;body.textContent=e.text;row.append(t,body);return row;}));area.scrollTop=$('followLog').checked?area.scrollHeight:position;}
 async function poll(){
   if(frozen)return;
-  const started=performance.now();
-  try{const data=await api('/api/state?after='+eventSeq+'&view='+($('robotPanel').open?'1':'0'));networkOK=true;lastOK=performance.now();last=data;
+  try{const data=await api('/api/state?after='+eventSeq+'&view=0');networkOK=true;lastOK=performance.now();last=data;
     if(!initialized){for(const p of data.profiles)$('profile').add(new Option(p.label,p.value));fillDefaults(data.defaults);initialized=true;if(!data.occupied)await claim();}
     if(lastProfileRequest!=null&&data.pending_profile==null){const result=data.state.motion_profile_result;if(result){$('profile').value=result.profile;$('protection').checked=result.joint_protection??data.state.joint_protection?.enabled??true;}}
     lastProfileRequest=data.pending_profile;
     if(data.events.length){events.push(...data.events);events=events.slice(-600);eventSeq=data.event_seq;renderLogs();}
-    if($('robotPanel').open)robot.accept(data.posture,started);
     render();
-  }catch(e){networkOK=false;robot.stale();notice(e.name==='AbortError'?'Local service is not responding. The session will stop if the page remains disconnected.':e.message);render();}
+  }catch(e){networkOK=false;notice(e.name==='AbortError'?'Local service is not responding. The session will stop if the page remains disconnected.':e.message);render();}
   if(!frozen)setTimeout(poll,networkOK?100:700);
 }
 $('claim').onclick=claim;
@@ -113,7 +147,6 @@ $('calibrate').onclick=()=>command('calibrate');$('resetArm').onclick=()=>comman
 $('recordToggle').onclick=()=>{const s=last.state,action=s.recording_phase==='recording'?'end_recording':s.auto_recording?'stop_batch':'start_recording';if(action==='start_recording'&&![...document.querySelectorAll('#recordFields input')].every(e=>e.reportValidity()))return;command(action,action==='start_recording'?recordOptions():{});};
 $('save').onclick=()=>command('save');$('discard').onclick=()=>command('discard');
 for(const id of ['backend','smoothing','profile','protection','batchName','seconds'])$(id).addEventListener('input',()=>{if(id==='backend'&&last){const p=last.profiles.find(p=>p.value===$('profile').value);if(p&&profileReason(p))$('profile').value='standard';}render();});
-$('robotPanel').ontoggle=()=>{const open=$('robotPanel').open;robot.setEnabled(open);$('resetView').disabled=!open;text('viewToggleLabel',open?'Hide 3D view':'Show 3D view');};$('resetView').onclick=()=>robot.reset();
 for(const id of ['logFilter','pauseLog','followLog'])$(id).onchange=renderLogs;
 $('clearLog').onclick=()=>{events=[];$('logs').replaceChildren();};
 let folderCurrent='';
@@ -121,5 +154,5 @@ async function openFolder(path){try{const data=await api('/api/folders?path='+en
 $('browse').onclick=()=>{$('folderDialog').showModal();openFolder($('output').value);};$('folderClose').onclick=()=>$('folderDialog').close();$('folderGo').onclick=()=>openFolder($('folderPath').value);$('folderPath').onkeydown=e=>{if(e.key==='Enter')openFolder($('folderPath').value);};$('folderChoose').onclick=()=>{if(folderCurrent)$('output').value=folderCurrent;$('folderDialog').close();};
 window.addEventListener('pagehide',()=>{frozen=true;if(token)navigator.sendBeacon('/api/release',JSON.stringify({token,client}));});
 window.addEventListener('pageshow',e=>{if(e.persisted)location.reload();});
-setInterval(()=>{if(networkOK&&performance.now()-lastOK>1500){networkOK=false;render();robot.stale();}},250);
+setInterval(()=>{if(networkOK&&performance.now()-lastOK>1500){networkOK=false;render();}},250);
 if(token)poll();else{notice('Launch Start-A and open its displayed URL to authorize this page.');text('connectionBadge','Page not authorized');text('summary','Start-A launches the local Web interface.');}

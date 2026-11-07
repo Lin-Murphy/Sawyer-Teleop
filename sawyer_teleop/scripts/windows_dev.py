@@ -39,7 +39,7 @@ def main():
             'assert Path(sawyer_teleop.__file__).resolve()==Path('
             + repr(str(ROOT / 'src/sawyer_teleop/__init__.py'))
             + ').resolve();assert sawyer_teleop.__version__==' + repr(version) + ';'
-            'import numpy,scipy,h5py,cv2,pytest,ruckig;'
+            'import numpy,scipy,h5py,cv2,pytest,ruckig,usb1;'
             'from scipy.spatial.transform import Rotation;'
             'print("Editable source:",sawyer_teleop.__file__);'
             'import sawyer_teleop.web_server;print("Python / Web:",__import__("sys").version.split()[0])'

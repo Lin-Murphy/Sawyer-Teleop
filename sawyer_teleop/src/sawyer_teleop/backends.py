@@ -3,6 +3,7 @@ import math
 import threading
 import time
 from .protocol import JOINTS, ns, pose, vector
+from .feedback_stream import FeedbackStreamSource
 
 
 def _quaternion_from_rpy(angles):
@@ -49,7 +50,7 @@ def _rpy_near(quaternion, seed):
     return min(candidates, key=lambda angles: sum((a-b)**2 for a, b in zip(angles, seed)))
 
 
-class FakeBackend:
+class FakeBackend(FeedbackStreamSource):
     name = "fake"
     tip_frame = "right_hand"
     # Software-test fixture only. Real/Gazebo adapters read the ROS named pose.
@@ -93,9 +94,17 @@ class FakeBackend:
                     "q": list(self.q), "dq": list(self.dq),
                     "pose": {"p": [0.5+self.q[0], self.q[1], 0.3+self.q[2]],
                              "q": _quaternion_from_rpy(self.q[4:7])},
+                    "twist": [0.0]*6,
                     "valid": self.fault is None, "fault": self.fault,
                     "robot": {"enabled": True, "estop": False},
                 }
+                # One synthetic joint and one endpoint message per new sample.
+                stamp = self.sample["source_stamp"]
+                self._stream_stage("joint", {"q": list(self.q), "dq": list(self.dq), "head_pan": None})
+                self._stream_commit("joint", stamp, now, now)
+                self._stream_stage("pose", {"p": self.sample["pose"]["p"], "q": self.sample["pose"]["q"],
+                                            "twist": [0.0]*6})
+                self._stream_commit("pose", stamp, now, now)
             return dict(self.sample, gripper={
                 "supported": True, "valid": self.fault is None and not self.frozen,
                 "target": self.gripper_target, "active": self.gripper_active,

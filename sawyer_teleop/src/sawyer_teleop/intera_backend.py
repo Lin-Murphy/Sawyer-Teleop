@@ -6,6 +6,7 @@ import threading
 from urllib.parse import urlparse
 
 from .protocol import JOINTS, ns, pose, vector
+from .feedback_stream import FeedbackStreamSource, finite_vector, twist_from
 from .neutral import read_neutral_pose
 from .kinematics_model import read_kinematics_model
 
@@ -15,7 +16,7 @@ from .kinematics_model import read_kinematics_model
 FEEDBACK_FUTURE_TOLERANCE_S = .05
 
 
-class InteraBackend:
+class InteraBackend(FeedbackStreamSource):
     name = "intera"
 
     def __init__(self, tip_frame="right_hand", state_timeout=.1, status_timeout=.5,
@@ -53,6 +54,9 @@ class InteraBackend:
         self.state_timeout = state_timeout
         self.status_timeout = status_timeout
         self.q = self.dq = self.endpoint = None
+        # Recording-only: every accepted joint/endpoint message also goes to
+        # feedback_stream (FeedbackStreamSource); control reads only the latest values.
+        self.twist = None
         self.seq = 0
         self.stamps, self.received, self.captured, self.invalid = {}, {}, {}, {}
         self.robot = None
@@ -132,6 +136,7 @@ class InteraBackend:
             # create a future monotonic capture or extend the stale deadline.
             self.captured[name] = self.received[name]-int(max(0., age)*1e9)
             self.invalid.pop(name, None)
+            self._stream_commit(name, stamp, self.received[name], self.captured[name])
 
     def _joint(self, msg):
         try:
@@ -140,9 +145,12 @@ class InteraBackend:
             positions, velocities = dict(zip(msg.name, msg.position)), dict(zip(msg.name, msg.velocity))
             q = vector([positions[n] for n in JOINTS], 7)
             dq = vector([velocities[n] for n in JOINTS], 7)
+            head = finite_vector([positions.get("head_pan")], 1)
             def update():
                 self.q, self.dq = q, dq
                 self.seq += 1
+                self._stream_stage("joint", {"q": q, "dq": dq,
+                                            "head_pan": head[0] if head else None})
             self._accept("joint", msg.header.stamp.to_sec(), update)
         except (ValueError, TypeError, KeyError):
             with self.lock:
@@ -157,8 +165,11 @@ class InteraBackend:
                 raise ValueError("endpoint invalid")
             p, q = msg.pose.position, msg.pose.orientation
             value = pose({"p": [p.x, p.y, p.z], "q": [q.x, q.y, q.z, q.w]})
-            self._accept("pose", msg.header.stamp.to_sec(),
-                         lambda: setattr(self, "endpoint", value))
+            twist = twist_from(msg)
+            def update():
+                self.endpoint, self.twist = value, twist
+                self._stream_stage("pose", {"p": value["p"], "q": value["q"], "twist": twist})
+            self._accept("pose", msg.header.stamp.to_sec(), update)
         except (ValueError, TypeError):
             with self.lock:
                 self.invalid["pose"] = "endpoint_invalid"
@@ -247,7 +258,7 @@ class InteraBackend:
                 "available_ns": max(self.received.get("joint", 0), self.received.get("pose", 0)),
                 "source_stamp": self.stamps.get("joint", 0),
                 "pose_source_stamp": self.stamps.get("pose", 0),
-                "q": self.q, "dq": self.dq, "pose": self.endpoint,
+                "q": self.q, "dq": self.dq, "pose": self.endpoint, "twist": getattr(self, "twist", None),
                 "valid": fault is None and self.q is not None and self.endpoint is not None,
                 "fault": fault, "robot": r, "gripper": gripper_state,
                 "feedback_diagnostics": {

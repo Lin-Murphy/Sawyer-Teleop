@@ -1,12 +1,52 @@
 # 项目状态
 
-更新：2026-10-29。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
+更新：2026-11-07。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
 
 > 2026-10-29 发布整理：Windows 入口合并为仓库根目录的 `Setup.cmd` / `Start-A.cmd` / `Start-B.cmd` / `Test.cmd`；
 > 文档合并为 SETUP / USAGE / TROUBLESHOOTING / DEVELOPMENT。下文历史条目里的旧脚本名（Install-Dev、Test-A、Stop-B、Install-Quest 等）、
 > 旧文档名和 `rog-local/`、`windows-local/artifacts/` 证据链接均指整理前的原作者本机环境，未随仓库发布。
 
 ## 当前决定
+
+### Raw 数据采集 schema 2（2026-11-07，软件验证通过，实机录制待验收）
+
+**完整原生反馈录制需更新 A、B，现有 A/B 仍可互连。** 现场 B 尚未替换。先保存 raw data，再按各模型需要转换。
+要求：初始状态、7 关节 q/dq、末端位姿和 twist（不要 effort、不要 wrench）、两路相机，图像 HDF5 无损 RGB 与 mp4 两份都存；
+各路按原生频率录制，导出时再按时间戳对齐；掉帧参考 DROID：不补帧，只记录并标记，导出时丢弃无帧的时间步。
+默认阈值：相机单次间隔 >250 ms 或掉帧 >5% 为 degraded；>1 s 无帧为 incomplete，停整批且不计数；反馈丢行 >1% 或间隔 >100 ms 为 degraded。
+
+已改（源码）：新增 `feedback_stream.py`（B 端每条已接受的 joint_states / endpoint_state 进有界队列，带每路序号；
+transport 的 latest 槽 `merge` 未发送的行；按会话 opt-in，旧 A/B 兼容，`feedback_stream_enabled` 可关）；
+`intera_backend` / `gazebo_backend` / `backends.FakeBackend` 接入并加 `twist`、`head_pan`；`bridge`（hello 能力、
+`feedback_stream` 请求、`drain_feedback_stream`）、`server._tick`、`client`（接收、`drain_feedback_stream`）；
+`recording.py` 升 schema 2：`feedback/joint`、`feedback/pose`、`states/eef_twist`、`commands/command_kind|target_pos|target_quat`、
+`frames/*/source_seq|open_count`、`camera_frame_gap` 事件、`alignment/<camera>/*_index|*_age_ns`、`quality`（attrs 与 manifest）；
+`cameras.py` 加 `source_seq` / `open_count`；`operator.py` 加 `initial_state`（反馈 >100 ms 拒绝开始）、
+批次间 Reset 的目标与误差、`required_cameras`（实机默认要求全部配置相机）、录制中相机丢失处理、质量为 incomplete 不计数；
+`web_session` 传 `required_cameras` / `feedback_stream`，相机录制默认开启；`config/operator.json` 改 `record_cameras_enabled: true`；
+`dataset.py` 导出排除 `quality_incomplete`。新增 `tests/test_feedback_stream.py`（12 项通过）；`tests/test_recording.py` 11 项通过。
+
+- **全套软件测试**：仓库 Python，`OPENBLAS_NUM_THREADS=1`，禁用 pytest 缓存，`--basetemp` 指向工作区。允许本机回环后，
+  共 1,006 项，983 通过 / 23 跳过 / 0 失败。早期 6 项录制测试失败由 `_initial_state` 遇到替身缺 `dq` / `age_s` 引起，
+  已在交接前修复，本轮全套确认通过。
+- **交接中约 65% 的 5 项失败**：从进度日志按收集顺序定位到 `test_local_ik.py`，分别是本地 IK TCP 模型绑定、缺模型时禁止回退、
+  Hold 后旧 IK 结果失效、末端模型位置偏差拒绝和姿态偏差拒绝。逐项复跑均在 `socket.connect` 报 `WinError 10013`，
+  发生于 hello 前。允许回环后 5 项均通过，本轮没有更改产品代码或放宽既有断言。
+- **新增导出回归**：写盘标记 `complete=true` 的段若 `quality.status=incomplete`，仍保留原文件，导出记录 `quality_incomplete` 及原因，
+  并在划分、生成样本与归一化之前排除。旧数据无 `quality` 时仍可导出。数据布局和实机相机要求已补到 [USAGE](USAGE.md#raw-schema-2)。
+- **固定输入门**：`windows_dev.py test lab-scene` 全部 7,177 条输入完整性检查及全部离线参考门通过。
+  未移时参考误差 P95 为 48.909 mm（记录与回放一致）。按用户后续指示跳过 Gazebo，仅做过 Docker 镜像自检，未启动仿真。
+  提交频率、IK 往返时间和 B 的 `control_gap` 前后对照未做。网页独立质量面板未做，已有录制状态消息和文件摘要可查看质量。
+- **现场只读连接**：新 A 已连实验室 B，后端确认为 `intera`，连续读取 3 秒，反馈年龄最大 40.5 ms，未发送运动命令。
+  现场 B 未声明 `feedback_stream`，A 回退到 latest；实机 schema 2 原生流、双相机录制和长时负载仍待验证。
+  已重新导出 [候选 B 包](../../windows-local/artifacts/raw-schema2-20261107/lab-export/B-Lab-Ubuntu/)，
+  82 个清单文件通过大小 / SHA-256 校验，Python 3.8 语法检查通过，固定现场配置逐字节一致。未替换或重启现场 B，`release_accepted=false`。
+- **证据**：[验证报告](../../windows-local/artifacts/raw-schema2-20261107/verification.json) 含失败用例、测试与输入文件逐项 SHA-256、
+  部署清单和现场读取结果。源码树 SHA-256 `a67918701a3cf01fca5e6dd4920de0ef92e40dc92b2791ef3ef13c1fdbda1e39`，
+  `config/operator.json` SHA-256 `436846ecc565c4e458afb7e5a11e2859ebf47a6e2599cc02918da786163755c4`，
+  离线参考门生效参数 SHA-256 `1089b2b710790266dfeedb4572f7cfb8576864181dd1c4d62a651bf4048e38d9`。
+- **下一步**：现场授权更换并启动新版 B 后，A 重连，勾选本机当前关闭的 **Record cameras**，确认全部相机在线，再做一次实机短录制。
+  核对 `quality`、两路原生反馈频率及两路 HDF5 RGB / MP4 的帧数。
 
 ### B 自动测量机器人时钟，免手动对时（2026-11-07）
 
@@ -22,6 +62,50 @@
 未连接机器人：机器人 NTP 实际应答、实测偏差与长期稳定性需现场启动 B 时看打印确认；若出现 WARNING 仍按 DEPLOYMENT 手动后备。
 证据：`../../windows-local/artifacts/robot-clock-auto-20261107/`。
 
+### 摄像头接入录制复核（2026-11-07）
+
+**本轮仅验证和记录，A/B 源码、运行配置、部署包和驱动无改动。** 用户确认停止 Start-A 后，用隔离 Web A 显式开启
+`Record cameras`。先用本机假 B 和合成手柄录制，再按用户要求直连实验室 Intera B（`10.101.119.182`）。
+控制与 IK 握手成功，B 报告原生 Cartesian 可用。探针 12/12 次反馈新鲜，估计年龄 12.8–26.1 ms。
+实体连接只读反馈，录制用的客户端只允许握手和时钟 ping，拦截运动与夹爪指令。未启动 Gazebo。
+
+- **实体 B，静止录制 6 s**：`wrist` 120 帧（20.02 Hz），`realsense` 119 帧（19.98 Hz，按首末帧计算）。
+  HDF5 两路均为 640×480 的 uint8 RGB，图像、序号、读取开始时间和读取完成时间逐帧对应。序号连续，时间严格递增，
+  均在片段时间窗内。时间戳使用 A 端单调时钟，记录主机读帧时间。MP4 各自可完整解码，帧数与 HDF5 一致。
+  两路相机的质量均为 `ok`，录制前后曝光正常；本段腕部 FIFO / 短帧 / IPC 计数无新增。原有低比例丢帧根因待查。
+  `states` 有 357 条实体反馈，七轴在文件精度下保持静止，`commands` 为空。整段因原生反馈流无数据被标为 `degraded`：
+  当前实体 B 的握手未声明 `feedback_stream`，本次只读客户端也关闭了原生反馈流请求。
+- **隔离对照**：假 B 加真实相机 6 s 得到 117 / 120 帧，HDF5 与 MP4 通过，腕部按目标帧数短 3 帧。
+  合成相机 4 s 得到每路 64 帧，序号无缺口，RGB 样本与合成输入一致。初次端到端验证遇到沙箱回环限制
+  （WinError 10013），放行本机回环后首次仍因合成源约 16 Hz 未达到脚本原定的帧数门槛。
+  复核以合成帧连续性和写入一致性为准，保留降级标记。全套 pytest 在受限沙箱中出现失败和错误，本轮未验收全套。
+  放行本机回环后，摄像头、Web 和录制相关 pytest 37 项通过。
+- 证据、配置 / 源码 / 脚本 / HDF5 SHA-256 及失败日志：`../../windows-local/artifacts/camera-handoff-20261107-170634-252/`。
+  实体录制核验见 `intera-171436/verification.json`。隔离实例已退出并释放相机。下一步由用户重启 Start-A，
+  选实体 Intera 并在连接前勾选 `Record cameras`。摄像头补丁待用户确认后单独提交。
+
+### 两路相机改 20 Hz，腕部相机掉帧与画质优化（2026-11-07）
+
+**仅更新 A（`sn9c20x.py`、`cameras.py`、`app.js`、`operator.json`），B 无需更新；无新依赖，需重启 Start-A，无需重校准。** 用户反馈腕部相机常掉帧，要求先改 20 Hz，并参考 `multimodality_data` 分支的处理优化 RGB 准确度、避免过曝 / 过暗。
+- 掉帧定位：运行中的 Start-A 采样 20 s，腕部 22–30 FPS 波动、RealSense 稳定 30。旧逻辑见任何错包标记就整帧丢弃，但 “主机未及时轮询（ISO_NOT_ACCESSED）” 时同步设备会把数据留在 FIFO 下次再发，并未丢数据 → 改为忽略该状态、以整帧必须恰好 307200 字节为完整性判据；排队读取 16×32 → 32×64 微帧（约 256 ms）；新增掉帧原因计数（`dropped_short/long`、`bridge_fifo_full`、`packets_not_polled` 等），经 `/api/state` 的 `cameras[].diagnostics` 可查。隔离实测：桥接 FIFO 溢出几乎全部在启动后 0.45 s 内（约前 8 帧），之后 12 s 内仅 1 次（约 0.4%）；**加载负载下的效果尚待重启 Start-A 后复测**。
+- 20 Hz：腕部在传感器层插入垂直虚拟行（ADVFL/ADVFH，Linux 曝光 > 547 时用的同一寄存器；分支记录曝光 960 时帧率降到 17 是线索），帧间隔均匀 50 ms、USB 数据量降三分之一。实测 274 行 → 19.50 Hz，据此标定每行约 65.5 µs，20 Hz 用约 254 行，复测 19.3–20.1 Hz（差值来自丢帧计入）。RealSense 硬件只有 6 / 15 / 30，设备仍跑 30（`source_fps`），软件按均匀时间网格保留 2/3（间隔 33 / 67 ms 交替，平均 20）。
+- 亮度：虚拟行也延长了这个传感器的实际积分，20 Hz 下沿用分支参数（曝光 300 / 增益 10）亮度均值 107 → 146。扫描后选 **曝光 300 不变、增益 10 → 4**：均值 107.9、中位 85、暗像素 3.1%、过亮 / 截断 0%，与原生 30 Hz 分支参数（106.2 / 83 / 5.3% / 0%）一致；曝光 60 + 增益 10 亮度相同但噪声更大，淘汰。红 / 蓝平衡沿用分支 33 / 28（场景已不同，未重新调白平衡）。分支的指标脚本未入库，过暗 / 过亮阈值为本项目自定（灰度 ≤ 20 / ≥ 245、单通道 ≥ 254）。
+- RGB 准确度：去马赛克改 OpenCV 边缘感知（`COLOR_BayerBGGR2BGR_EA`），0.3 ms/帧；同一原始帧对比斜边阶梯伪色略少，边缘色度指标 9.71 → 9.65，**改善很小**。
+- 过曝 / 过暗提示：`CameraHub` 每秒对 1/4 降采样图算亮度分位、暗 / 亮 / 截断比例和 RGB 均值，页面在帧率旁显示 Overexposed / Too dark，悬停看数值。
+- 关闭卡死：停止重提后 32 个排队传输里约 6–7 个 WinUSB 永不返回，python-libusb1 `close()` 永久等待（Ctrl+C 退出 Start-A 也会卡）。改为排空 1 s 后把这些传输从库的在途登记中移除、保留引用不释放，再关句柄；连续 3 次开关各 1.0 s，进程正常退出。
+- 测试：新增虚拟行、均匀抽帧、曝光判定、整帧大小与未轮询包用例；完整 pytest 通过。哈希：`sn9c20x.py` `75bf4728bd26`、`cameras.py` `284729e222eb`、`config/operator.json` `9c780a725811`。
+- 真实负载复测（用户重启 Start-A 后只读采样 30 s）：腕部 19.8 FPS 均值（最低 18.0，修改前 30 Hz 档为 22–30 波动），30 s 内丢 6 帧 / 约 655 帧（约 0.9%：桥接 FIFO 满 3 次、短帧 6 次，无传输错包）；RealSense 20.0 FPS（19.7–20.4）。曝光：腕部中位 88、暗 2.0%、过亮 / 截断 0%、RGB 均值 112/109/107；RealSense 中位 143、暗 3.3%、0% 截断，均判定正常。
+- 剩余：约 1% 的桥接 FIFO 溢出短帧仍在，未影响 20 Hz 均值。
+- 独立进程收包（用户要求，同日）：`SN9C20xProcessCapture` 用 spawn 子进程独占 USB 与切帧，经队列把原始帧交主进程转色；父进程退出时子进程 0.5 s 内自退，关闭超 5 s 强制结束。`-I` 启动方式实测子进程 0.3 s 起、错误可回传。Start-A 真实负载 30 s：19.8 FPS（最低 18.1），丢 5/647（0.8%，FIFO 满 2、短帧 4、长帧 1），`ipc_dropped` 0——与改前 0.9% **无可测差异**，说明剩余丢帧不是主进程 GIL 抢占所致，而在 USB / 设备层（隔离单跑也有约 0.4%）。保留子进程（对录制等后续主进程负载有隔离作用），根因未查明；可尝试的下一步是换 alt 7 带宽档或分析 WinUSB 调度，本轮未做。
+
+### 腕部 Sandberg 相机在 Windows A 上用 WinUSB + 用户态驱动出图（2026-11-07）
+
+**仅更新 A（新增 `sn9c20x.py`、`cameras.py` 的 `sn9c20x` 后端、`operator.json` 的 `wrist` 条目、Windows 依赖 `libusb1==3.4.0`），B 无需更新；需重新 Setup 或手动装 libusb1、重启 Start-A，无需重校准。** 用户坚持在本机用原腕部相机（0c45:627b，SN9C201 + OV7660），Windows 无可用签名驱动（见下一条）。
+- 做法：把 Linux `gspca/sn9c20x.c`（GPL-2.0+，文件内注明出处）的桥接初始化表、OV7660 寄存器表、I2C 协议、色彩矩阵 / 伽马 / 红蓝平衡 / 增益 / 曝光写法和 64 字节帧头切帧移植为 Python 用户态读取器；只实现 640×480 原始 BGGR + 手动曝光，按 `cv2.COLOR_BayerBGGR2BGR` 转色。设备驱动为**系统自带、微软签名的 WinUSB**（设备管理器手动指定 “WinUsb Device”），不关任何安全设置。`controls` 直接沿用 `sandberg_camera/camera_profile.json`（曝光 300、增益 10、红 / 蓝 33 / 28 等，V4L2 同名同单位）。
+- 绕开的 libusb 1.0.29 问题：任一包出错时 WinUSB 整个等时读返回 ERROR_GEN_FAILURE，libusb 不转换包描述 → 按 USBD `{Offset, Length, Status}` 取出好包，丢弃该帧（同 Linux 丢帧语义），每次重新 `setIsochronous` 后再提交；取消等时传输会被 libusb 内部回退逻辑重提而永不完成 → 关闭时不 cancel，停止重提让 4 ms 传输自然排空，关闭整体限时 3 s。
+- 结果：直连笔记本 USB 口、alt 8：首帧 0.77 s，两次各 6 s 连续 168 / 174 帧（28.7 / 29.7 FPS），0–1 个错包，开关可重复；画面颜色正确（红色机械臂、黄黑警示带、绿色夹指）。8790 隔离 Web 实例页面显示腕部 30.0 FPS 采集、约 25 FPS 刷新。新增 `tests/test_sn9c20x.py`（切帧、丢帧、公式、失败传输取包、后端选择）。哈希：`sn9c20x.py` `a90d507e69aa`、`cameras.py` `280d4ceb5699`、`config/operator.json` `683ea5de9cf4`、profile `98aaa60431fb`。
+- 失败与淘汰：UsbDk 1.0.22（已安装、服务运行）能枚举但对 Code 28 设备的接管卡死、强杀后枚举失败需重插，**淘汰**（可卸载）；经 WCH 1a86:8095 扩展坞时 alt 6–8 约 2 s 后大量 XACT_ERROR 并掉线重枚举、alt 1–4 不掉线但带宽不足（每帧仅 7–18 KB，帧头 FIFO 满标志），**必须直连电脑**。WinUSB 绑定按 USB 口记，换口需重新指定。录制路径只做了离线 / 隔离验证，未做带摄像头的整批录制与实机遥操。
+- 下一步：用户停止旧 Start-A 后重启，确认两路同时在线；再做一次勾选 Record cameras 的短录制核对 HDF5 中两路图像与时间戳。
 
 ### 批量录制新增“Reset arm between episodes”勾选项（2026-11-07）
 
@@ -34,7 +118,6 @@ Gazebo 含场景恢复）；只有确认到位后才从此刻起计间隔，再�
 本地 Web 假后端截图确认勾选项显示。未在 Gazebo 或实机运行；实机复位会运动，首次使用需操作者在授权下确认路径与急停。
 同文件中他人未提交的摄像头改动原样保留。证据：`../../windows-local/artifacts/batch-reset-between-20261107/`。
 
-
 ### Smooth teleop 默认改为 DROID-like 150 ms（2026-11-07）
 
 **仅更新 A（配置模板），B 无需更新；无代码 / 依赖变化，无需重校准。** 用户要求把界面上已选的 Smooth teleop 开启 +
@@ -45,6 +128,18 @@ USAGE、CURRENT_TELEOP_METHOD 同步，新增 `tests/test_smoothing_default.py`�
 75 通过 / 22 Windows 跳过 Ubuntu 脚本 / 0 失败。150 ms 约 450 ms 达 95%，滞后明显，仍需实测手感；不代表实机验收。
 证据：`../../windows-local/artifacts/smoothing-default-150-20261107/`。下一步：重启 A 即用新默认（已有本机配置不受影响）。
 
+### Web A 显示腕部 + RealSense 两路实时画面，移除 3D 姿态面板（2026-11-07）
+
+**仅更新 A（代码 + `operator.json` 的 `cameras`），B 无需更新；无依赖新增，需重启 Start-A 生效，无需重校准。** 用户要求把 `multimodality_data` 分支（cb95b07 / c85b625）配好的摄像头接入当前项目，在 Live status 下方并排显示两路实时画面，并删除 Actual robot posture。
+- `cameras.py`：Windows 下 `device` 可写 DirectShow 设备名，按名字解析到 OpenCV `CAP_DSHOW` 索引（找不到即报 `camera_not_found`，**不回退到其他设备**，避免误用笔记本自带摄像头）。新增 `CameraHub`：Web 服务启动即常驻采集（断开后每 2 s 重连），`/api/camera?name=` 返回带鉴权的 JPEG；勾选 Record cameras 时录制复用同一采集（`SharedCamera`，不重复打开设备）。
+- 配置：`wrist` = `USB20 Camera`（Sandberg，0c45:627b），`realsense` = `Intel(R) RealSense(TM) Depth Camera 435 with RGB Module RGB`（UVC RGB 640×480@30，不依赖 pyrealsense2，无深度）。本机 `windows-local/config/operator.json` 同步。旧的 `front`（索引 0 = 笔记本内置摄像头）已删除。
+- 页面：右栏 Live status 下新增 Cameras 卡片两列并排；删除 3D 姿态面板及其轮询（服务端 posture 接口保留未用）。CSP `img-src` 增加 `blob:`。
+- 分支的 Linux 工具代码与配置（不含 4000+ 调试图片 / robot_dataset）放到工作区根 `sandberg_camera/`、`realsense_camera/` 作参考；其 v4l2 曝光 / 增益 / 裁剪参数在 Windows 上不生效。
+
+结果：本机 DirectShow 枚举为 0 Integrated / 1 RealSense Depth / 2 RealSense RGB / 3–6 Quest 虚拟设备，截帧确认索引 2 为实验室场景。8790 端口隔离实例浏览器验证：RealSense 30.0 FPS、页面刷新约 27 FPS、无控制台错误；完整 pytest 通过（test_web 新增摄像头接口 / 鉴权 / 404 断言，配置哈希 `c2c26ebb6f52`、cameras.py `958a42287434`）。
+失败 / 未完成：**腕部相机在 Windows 上 Code 28 “未安装驱动”**（SN9C20x 为厂商类 0xFF、非 UVC，分支方案依赖 Linux `gspca_sn9c20x`），页面显示 No signal 与原因；未安装驱动（属系统改动，需用户决定）。录制在腕部无画面时勾选 Record cameras 会按原规则失败。未接入真机或执行运动。
+Windows 驱动排查（同日，用户授权下载检查、未安装）：Microsoft Update Catalog 无 627B 条目；仅第三方 2006–2009 年 Sonix `snp2std` 包。下载 webcamtests.com `Sonix Chicony 5.7.2.004` `Windows.zip`（5,358,659 B，MD5 `0ba07a94…` 与页面所列 `382961be…` 不符，SHA256 `a85d4211…`）：INF 含 NTamd64 的 `USB\VID_0c45&PID_627b`（SN9C201 + OV7660），但引用的 `snp2std.cat` 不在包内，全部 .sys/.dll/.exe 均 NotSigned。64 位 Windows 11 强制驱动签名且本机内存完整性（HVCI）开启，该包无法正常加载；只能靠测试签名模式 / 关闭签名强制与 HVCI，属削弱系统安全，不采用。
+下一步（已被上面“WinUSB + 用户态驱动”条目取代）：腕部相机改用免驱 UVC 相机，或在 Ubuntu A 上使用原 SN9C20x 相机。
 
 ### 实体 Sawyer Reset arm 改为新实测姿态（2026-11-07）
 

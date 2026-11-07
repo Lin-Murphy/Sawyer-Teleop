@@ -132,11 +132,16 @@ class BridgeServer:
         while not self.stop.is_set():
             try:
                 receipt, state = self.core.tick()
+                drain = getattr(self.core, "drain_feedback_stream", None)
+                stream = drain() if drain else None
+                if stream:
+                    # Recording-only side channel; merged forward if a state frame is replaced unsent.
+                    state = dict(state, feedback_stream=stream)
                 conn = self.owner
                 if conn and not conn.closed.is_set():
                     if receipt:
                         conn.send(receipt)
-                    conn.send(state, latest="state")
+                    conn.send(state, latest="state", merge="feedback_stream")
             except ConnectionError:
                 pass
             except Exception as exc:

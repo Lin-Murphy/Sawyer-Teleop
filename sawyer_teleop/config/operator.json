@@ -38,16 +38,41 @@
   "data_dir": "../data",
   "cameras": [
     {
-      "name": "front",
-      "device": 0,
+      "name": "wrist",
+      "label": "Wrist camera · Sandberg SN9C201",
+      "device": "usb:0c45:627b",
       "width": 640,
       "height": 480,
-      "fps": 30,
-      "backend": "auto"
+      "fps": 20,
+      "backend": "sn9c20x",
+      "controls": {
+        "gain_automatic": 0,
+        "exposure": 300,
+        "gain": 4,
+        "red_balance": 33,
+        "blue_balance": 28,
+        "brightness": 127,
+        "contrast": 127,
+        "saturation": 127,
+        "hue": 0,
+        "gamma": 16,
+        "horizontal_flip": 0,
+        "vertical_flip": 0
+      }
+    },
+    {
+      "name": "realsense",
+      "label": "Workspace camera · RealSense D435 RGB",
+      "device": "Intel(R) RealSense(TM) Depth Camera 435 with RGB Module RGB",
+      "width": 640,
+      "height": 480,
+      "fps": 20,
+      "backend": "auto",
+      "source_fps": 30
     }
   ],
   "connection_backend": "gazebo",
-  "record_cameras_enabled": false,
+  "record_cameras_enabled": true,
   "ik_mode": "local",
   "feedback_profile": "gazebo_250ms",
   "gazebo_max_acceleration_rad_s2": [

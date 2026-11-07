@@ -10,6 +10,7 @@ import h5py
 import pytest
 
 from sawyer_teleop.backends import FakeBackend
+from sawyer_teleop.cameras import CameraHub, SyntheticCamera
 from sawyer_teleop.client import RobotClient
 from sawyer_teleop.demo import SyntheticQuest, wait_until
 from sawyer_teleop.operator import Operator
@@ -43,7 +44,8 @@ def web(tmp_path):
         inputs.append(quest)
         return Operator(RobotClient('127.0.0.1', bridge.control_port, bridge.ik_port, expected_backend='fake'),
                         quest, [], tmp_path/'data')
-    session = WebSession(path, operator_factory=factory, display=NoUSB()).start()
+    cameras = CameraHub([dict(name='wrist', label='Synthetic wrist', width=64, height=48, fps=30)], SyntheticCamera)
+    session = WebSession(path, operator_factory=factory, display=NoUSB(), cameras=cameras).start()
     session.claim(OWNER)
     yield session, bridge, inputs, tmp_path
     session.close()
@@ -232,6 +234,15 @@ def test_http_auth_origin_assets_and_live_snapshot(web):
             get('/api/state', auth=False)
         assert exc.value.code == 403
         assert json.load(get('/api/state'))['owner']
+        until(session, lambda snap: snap['cameras'][0]['live'])
+        with get('/api/camera?name=wrist') as response:
+            assert response.headers['Content-Type'] == 'image/jpeg' and response.read(2) == bytes([0xff, 0xd8])
+        with pytest.raises(HTTPError) as exc:
+            get('/api/camera?name=missing')
+        assert exc.value.code == 404
+        with pytest.raises(HTTPError) as exc:
+            get('/api/camera?name=wrist', auth=False)
+        assert exc.value.code == 403
         assert json.load(get('/api/action', body=dict(seq=1, action='connect', options={'host':'127.0.0.1','backend':'fake'})))['ok']
         until(session, lambda snap: snap['phase'] == 'connected')
         assert json.load(get('/api/state?view=1'))['posture']['session']

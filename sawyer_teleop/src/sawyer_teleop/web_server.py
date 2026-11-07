@@ -72,7 +72,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'no-referrer')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(data)
 
@@ -109,6 +109,14 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == '/api/state':
                 after = max(0, int(query.get('after', ['0'])[0]))
                 result = self.server.session.snapshot(client, after, query.get('view') == ['1'])
+            elif url.path == '/api/camera':
+                try:
+                    data = self.server.session.cameras.jpeg(query.get('name', [''])[0])
+                except KeyError:
+                    return self._respond(404, {'error': 'Unknown camera'})
+                except RuntimeError as exc:
+                    return self._respond(503, {'error': str(exc)})
+                return self._respond(200, data, 'image/jpeg')
             elif url.path == '/api/folders':
                 path = Path(query.get('path', [self.server.session.defaults()['output']])[0]).expanduser().resolve()
                 while not path.exists() and path != path.parent:

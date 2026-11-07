@@ -8,6 +8,7 @@ from .protocol import JOINTS, ns, pose, vector
 from .neutral import read_neutral_pose, gazebo_neutral_pose
 from .kinematics_model import read_kinematics_model
 from .gripper import SimulationGripper
+from .feedback_stream import FeedbackStreamSource, finite_vector, twist_from
 
 
 class SimulationClock:
@@ -49,7 +50,7 @@ class SimulationClock:
         return min(self.wall(), history[index][1])
 
 
-class GazeboBackend:
+class GazeboBackend(FeedbackStreamSource):
     name = "gazebo"
 
     def __init__(self, tip_frame="right_hand", state_timeout=.1):
@@ -70,6 +71,7 @@ class GazeboBackend:
         self.clock = SimulationClock(state_timeout)
         self.seq = 0
         self.q = self.dq = self.endpoint = None
+        self.twist = None
         self.stamps, self.received, self.captured, self.invalid = {}, {}, {}, {}
         self.pending_sources = {}
         self.command_class, self.request_class = JointCommand, SolvePositionIKRequest
@@ -164,6 +166,7 @@ class GazeboBackend:
             self.received[name] = received
             self.captured[name] = min(captured, received)
             self.invalid.pop(name, None)
+            self._stream_commit(name, stamp, received, self.captured[name])
 
     def _joint(self, msg):
         try:
@@ -173,8 +176,10 @@ class GazeboBackend:
             positions, velocities = dict(zip(msg.name, msg.position)), dict(zip(msg.name, msg.velocity))
             q, dq = vector([positions[n] for n in JOINTS], 7), vector([velocities[n] for n in JOINTS], 7)
             received = ns()
+            head = finite_vector([positions.get("head_pan")], 1)
             def update():
                 self.q, self.dq = q, dq
+                self._stream_stage("joint", {"q": q, "dq": dq, "head_pan": head[0] if head else None})
                 self.gripper.observe(positions, min(received, self.clock.captured(msg.header.stamp.to_sec())))
             self._accept("joint", msg.header.stamp.to_sec(), update, received)
         except (ValueError, TypeError, KeyError):
@@ -188,7 +193,11 @@ class GazeboBackend:
                 raise ValueError("endpoint invalid")
             p, q = msg.pose.position, msg.pose.orientation
             value = pose({"p": [p.x, p.y, p.z], "q": [q.x, q.y, q.z, q.w]})
-            self._accept("pose", msg.header.stamp.to_sec(), lambda: setattr(self, "endpoint", value))
+            twist = twist_from(msg)
+            def update():
+                self.endpoint, self.twist = value, twist
+                self._stream_stage("pose", {"p": value["p"], "q": value["q"], "twist": twist})
+            self._accept("pose", msg.header.stamp.to_sec(), update)
         except (ValueError, TypeError):
             with self.lock:
                 self.pending_sources.pop("pose", None)
@@ -213,6 +222,7 @@ class GazeboBackend:
                     "source_stamp": self.stamps.get("joint", 0),
                     "pose_source_stamp": self.stamps.get("pose", 0),
                     "q": self.q, "dq": self.dq, "pose": self.endpoint,
+                    "twist": getattr(self, "twist", None),
                     "valid": fault is None and self.q is not None and self.endpoint is not None,
                     "fault": fault, "robot": {"simulation": True},
                     "gripper": self.gripper.snapshot()}

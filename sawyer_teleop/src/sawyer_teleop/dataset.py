@@ -39,6 +39,12 @@ def export_dataset(root, output, hz=50, valid_fraction=.2, seed=42):
             if not source.attrs.get("complete", False):
                 excluded.append({"path": str(path), "reason": "incomplete"})
                 continue
+            quality = json.loads(source.attrs.get("quality", "{}") or "{}")
+            if quality.get("status") == "incomplete":
+                # e.g. a camera was lost; kept on disk for inspection, never trained on.
+                excluded.append({"path": str(path), "reason": "quality_incomplete",
+                                 "details": quality.get("reasons", [])})
+                continue
             if "ns" not in source["commands"] or len(source["commands/ns"]) < 2:
                 excluded.append({"path": str(path), "reason": "insufficient_commands"})
                 continue

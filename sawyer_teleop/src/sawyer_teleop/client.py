@@ -18,9 +18,17 @@ from .rates import EventRate
 
 class RobotClient:
     def __init__(self, host, control_port=8765, ik_port=8766, timeout=.1, expected_backend=None,
-                 ik_mode="remote", feedback_profile="standard", defer_remote_ik=False):
+                 ik_mode="remote", feedback_profile="standard", defer_remote_ik=False,
+                 feedback_stream=True):
         if ik_mode not in ("remote", "local"):
             raise ValueError("invalid_ik_mode")
+        # Recording-only copy of every accepted B feedback message. Control keeps
+        # reading ``self.state`` (latest value only); this never feeds control.
+        self.feedback_stream_requested = bool(feedback_stream)
+        self.feedback_stream_status = {"enabled": False, "reason": "not_requested"}
+        self.stream_rows = collections.deque()
+        self.stream_capacity = 8192
+        self.stream_dropped_b = self.stream_dropped_a = 0
         self.ik_mode, self.local_ik = ik_mode, None
         self.defer_remote_ik = defer_remote_ik
         self.host, self.control_port, self.ik_port = host, control_port, ik_port
@@ -97,6 +105,7 @@ class RobotClient:
             self.snapshot()
             if self.local_ik is not None:
                 self._check_kinematic_feedback()
+            self.enable_feedback_stream()
             threading.Thread(target=self._sync_loop, daemon=True).start()
             return self
         except Exception:
@@ -138,6 +147,10 @@ class RobotClient:
                 if self.state_received_ns is not None:
                     self.arrival_gap_ns = received-self.state_received_ns
                 self.state_received_ns = received
+                stream = msg.get("feedback_stream")
+                if stream is not None:
+                    msg = {k: v for k, v in msg.items() if k != "feedback_stream"}
+                    self._stream_receive(stream, received)
                 self.state = msg
             elif kind == "submitted":
                 if len(self.receipts) >= 256:
@@ -146,6 +159,43 @@ class RobotClient:
                 self.submitted_count += 1
             else:
                 raise ProtocolError("unexpected_message")
+
+    def _stream_receive(self, stream, received):
+        if not isinstance(stream, dict) or not isinstance(stream.get("rows"), list):
+            raise ProtocolError("invalid_feedback_stream")
+        self.stream_dropped_b += integer(stream.get("dropped", 0), "feedback stream dropped")
+        for row in stream["rows"]:
+            if not isinstance(row, dict) or row.get("kind") not in ("joint", "pose"):
+                raise ProtocolError("invalid_feedback_stream_row")
+            if len(self.stream_rows) >= self.stream_capacity:
+                self.stream_rows.popleft()
+                self.stream_dropped_a += 1
+            # Clock conversion uses the estimate current at arrival (as states do).
+            self.stream_rows.append(dict(row, session=self.session, a_received_ns=received,
+                                         clock_offset_ns=self.offset_ns,
+                                         clock_uncertainty_ns=self.uncertainty_ns))
+
+    def enable_feedback_stream(self):
+        """Opt in once per connection; an older B keeps the latest-value recording path."""
+        if not self.feedback_stream_requested:
+            self.feedback_stream_status = {"enabled": False, "reason": "disabled_by_config"}
+        elif (self.hello or {}).get("feedback_stream") != 1:
+            self.feedback_stream_status = {"enabled": False, "reason": "B_lacks_feedback_stream"}
+        else:
+            try:
+                self.request("feedback_stream", enabled=True)
+                self.feedback_stream_status = {"enabled": True, "schema": 1, "reason": None}
+            except (ProtocolError, TimeoutError, ConnectionError) as exc:
+                self.feedback_stream_status = {"enabled": False, "reason": "request_failed: "+str(exc)}
+        return dict(self.feedback_stream_status)
+
+    def drain_feedback_stream(self):
+        """Return (rows, counters). Counters are cumulative since connect."""
+        with self.lock:
+            rows = list(self.stream_rows)
+            self.stream_rows.clear()
+            return rows, {"dropped_b": self.stream_dropped_b, "dropped_a": self.stream_dropped_a,
+                          "status": dict(self.feedback_stream_status)}
 
     def request(self, kind, timeout=.3, **kwargs):
         with self.lock:

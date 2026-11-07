@@ -8,7 +8,7 @@ import tempfile
 import threading
 import time
 
-from .cameras import Camera
+from .cameras import CameraHub
 from .client import RobotClient
 from .connection_profiles import BACKENDS, DEFAULT_BACKEND, connection_ports
 from .devices import discover_quests
@@ -58,12 +58,14 @@ def json_safe(value):
 class WebSession:
     LEASE_SECONDS = 3.0  # UI supervision only; existing motion deadlines are unchanged.
 
-    def __init__(self, config_path, operator_factory=None, display=None):
+    def __init__(self, config_path, operator_factory=None, display=None, cameras=None):
         self.path = Path(config_path).resolve()
         self.config = json.loads(self.path.read_text(encoding='utf-8'))
         self.lock = threading.RLock()
         self.operator_factory = operator_factory or self._make_operator
         self.display = display or QuestConnection(self.config.get('quest_serial'), self.config.get('adb', 'adb'))
+        # Live view keeps A cameras open; recording borrows the same captures.
+        self.cameras = cameras if cameras is not None else CameraHub(self.config.get('cameras', []))
         self.operator = None
         self.phase = 'disconnected'
         self.message = 'Ready. Connect B and Quest to begin.'
@@ -91,6 +93,7 @@ class WebSession:
 
     def start(self):
         self.display.start()
+        self.cameras.start()
         self.thread = threading.Thread(target=self._watch, name='web-session', daemon=True)
         self.thread.start()
         return self
@@ -130,7 +133,7 @@ class WebSession:
                     profile=selected_motion_profile(self.config.get('motion_profile'),
                         self.config.get('gazebo_max_acceleration_rad_s2')),
                     joint_protection=self.config.get('joint_protection_enabled', True),
-                    cameras=self.config.get('record_cameras_enabled', False), output=str(output.resolve()),
+                    cameras=self.config.get('record_cameras_enabled', True), output=str(output.resolve()),
                     fast_available=self.config.get('gazebo_max_acceleration_rad_s2') is not None)
 
     def claim(self, client):
@@ -241,7 +244,7 @@ class WebSession:
                 pending_profile=self.pending_profile, usb=self.display.snapshot().get('usb'),
                 devices=self.devices, scanning=self.scanning, backends=BACKENDS, profiles=profiles,
                 events=[x for x in self.events if x['seq'] > after], event_seq=self.event_seq,
-                posture=posture, last_recording=self.last_recording))
+                posture=posture, last_recording=self.last_recording, cameras=self.cameras.status()))
 
     def command(self, client, sequence, action, options):
         with self.lock:
@@ -304,14 +307,23 @@ class WebSession:
             self.config.get('state_timeout_s', .1), expected_backend=backend,
             ik_mode=self.config.get('ik_mode', 'local') if backend == 'gazebo' else 'remote',
             feedback_profile=self.config.get('feedback_profile', 'standard') if backend == 'gazebo' else 'standard',
-            defer_remote_ik=(settings['profile'] == 'intera_pose_50hz')),
+            defer_remote_ik=(settings['profile'] == 'intera_pose_50hz'),
+            feedback_stream=self.config.get('feedback_stream_enabled', True)),
             QuestInput(settings['serial'] or None, self.config.get('adb', 'adb')),
-            [Camera(**x) for x in self.config.get('cameras', [])] if settings['cameras'] else [],
+            self.cameras.views() if settings['cameras'] else [],
             self.defaults()['output'], self.config.get('operator_hz', 50),
             self.config.get('position_scale', 1.),
             dict(self.config.get('motion', {}), enabled=settings['smoothing'], time_constant_ms=settings['smoothing_ms']),
             self.config.get('trajectory'), self.config.get('gazebo_max_acceleration_rad_s2'),
-            settings['profile'], joint_protection=settings['joint_protection'])
+            settings['profile'], joint_protection=settings['joint_protection'],
+            required_cameras=self._required_cameras(backend))
+
+    def _required_cameras(self, backend):
+        """Real-arm collection must record every configured camera; simulation may opt in."""
+        required = self.config.get('record_require_cameras')
+        if required is None:
+            required = backend == 'intera'
+        return [c['name'] for c in self.config.get('cameras', [])] if required else []
 
     def _connect(self, options):
         if self.operator is not None or self.phase in ('connecting', 'disconnecting'):
@@ -462,3 +474,4 @@ class WebSession:
         if self.thread:
             self.thread.join(timeout=2)
         self.display.close()
+        self.cameras.close()

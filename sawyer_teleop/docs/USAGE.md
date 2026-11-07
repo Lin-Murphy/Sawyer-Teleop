@@ -124,12 +124,31 @@ DROID-like 150 ms（默认，2026-11-07 起），约 450 ms 达到 95%，更顺�
 
 保存成功才计数，同名不覆盖；倒计时不会自动握持或驱动机器人。结束录制也不会停止遥操。
 
+实机录制要求开启 **Record cameras**，并确认全部已配置相机在线且正在出帧。已有本机配置会保留原勾选状态。
+开始时还需要 100 ms 内的机器人反馈。
+录制中某路相机持续 1 秒无帧时，A 停止整批，保留该段供检查，该段不计入批次数量。
+
 **Reset arm between episodes**（默认不勾选）：勾选后，每条保存或丢弃处理完、且整批未结束时，A 自动执行一次
 Reset arm（与按钮相同的复位目标、0.25 倍限速与到位判据；Gazebo 同时恢复场景），确认到位后才开始间隔倒计时，
 再开始下一条。复位会使机械臂运动，期间手柄握持无效；完成后需松开再握持才恢复遥操。点 **Stop reset**、
 Save & End，或复位超时 / 故障 / 断连，都会停在原地并结束整批，不会自动开始下一条。最后一条之后不复位。
 开始前若 B 不提供可用的 Reset 姿态，则拒绝开始录制。该选项记入 `batch.json` 与每条 metadata 的 `batch.reset_between`。
 manifest / HDF5 的 `complete` 只表示数据完整写盘，不表示任务成功。格式见 [DATASET](reference/DATASET.md)。
+
+#### Raw schema 2
+
+| 位置 | 内容 |
+| --- | --- |
+| `feedback/joint` | B 已接收的原生频率关节反馈，含 7 轴 `q` / `dq`（rad / rad/s）、源时间戳和每路序号 `stream_seq`。 |
+| `feedback/pose` | B 已接收的原生频率末端反馈，含 `eef_pos`、`eef_quat`（xyzw）及 `eef_twist`（线速度在前、角速度在后），`eef_twist_valid` 标识是否有效。 |
+| `frames/<相机名>/rgb` 和 `<相机名>.mp4` | HDF5 保存无损 RGB，MP4 保存同序帧供预览。以 HDF5 的每帧 `ns` 为准。 |
+| `alignment/<相机名>` | 每帧在 `states`、`feedback/joint`、`feedback/pose` 中各自最新且不晚于该帧的行索引及年龄，字段为 `state/joint/pose` 对应的 `*_index` 和 `*_age_ns`，无匹配时为 `-1`。 |
+| `quality` | HDF5 根属性和 `manifest.json` 中的质量摘要，含相机帧率、掉帧率、最大间隔，以及每路反馈频率、丢行率和最大间隔。 |
+| `metadata.initial_state` | 每段开始时的关节位置 / 速度、末端位姿和可用的 twist、夹爪状态、反馈年龄及源时间戳。批间复位后还记录目标关节角及最大到位误差。 |
+
+`feedback_stream` 按 A/B 会话协商，仅供录制。旧 B 或禁用该能力时仍保存 `states` 最新值快照，原生反馈组为空并在质量中标记缺失。
+两类反馈均不记录 effort 或 wrench。录制保留各路原始时间戳并记录缺口，不补帧。导出按时间戳选择仍有效的过去帧，
+丢弃没有有效帧的时间步，并跳过 `quality.status == incomplete` 的整段。
 
 录制默认保存到 `windows-local/data/`（Ubuntu：`ubuntu-local/data/`）。离线分析和导出（只读录制，不连接 B）：
 

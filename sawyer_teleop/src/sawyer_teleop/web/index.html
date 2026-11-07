@@ -46,7 +46,7 @@
             <label class="check full"><input type="checkbox" id="resetBetween" data-record> Reset arm between episodes</label>
             <label class="full">Output folder on A<div class="input-action"><input id="output" data-record><button id="browse" class="subtle" data-record>Browse</button></div></label>
           </div>
-          <label class="check camera-check"><input type="checkbox" id="cameras" data-connection> Record workspace camera</label>
+          <label class="check camera-check"><input type="checkbox" id="cameras" data-connection> Record cameras (wrist + workspace)</label>
           <div id="recordError" class="inline-error" role="alert" hidden></div>
           <div class="record-meter"><span id="recordPhase">Not recording</span><strong id="recordTime">0.0 / 60.0 s</strong><progress id="progress" value="0" max="60"></progress></div>
           <p id="counts" class="hint">Saved 0 · Discarded 0 · Total 0.0 s</p>
@@ -70,7 +70,10 @@
           </section>
         </section>
 
-
+        <section class="card camera-card" aria-labelledby="cameraHeading">
+          <div class="card-heading"><h2 id="cameraHeading">Cameras</h2><span class="small-tag">Live · A computer</span></div>
+          <div class="camera-grid" id="cameraGrid"></div>
+        </section>
       </div>
     </div>
 
@@ -79,14 +82,6 @@
       <div id="logs" class="log-lines" role="log" aria-label="Operator activity"></div>
       <p class="hint">Latest 600 events in memory. Log controls only affect this display.</p>
     </section>
-    <details class="card view-card" id="robotPanel">
-      <summary class="view-toggle"><span><strong>Actual robot posture</strong><small>Read-only · B joint feedback</small></span><span class="view-toggle-label" id="viewToggleLabel">Show 3D view</span></summary>
-      <div class="view-body">
-        <div class="viewport"><canvas id="robotCanvas" aria-label="Interactive read-only three-dimensional robot feedback" tabindex="0"></canvas><div id="viewOverlay" class="view-overlay">Waiting for actual feedback.</div><span id="viewStatus" class="view-status">DISPLAY OFF</span><button id="resetView" class="view-reset" disabled>Reset view</button></div>
-        <div class="view-footer"><span>Drag to rotate · Scroll to zoom · Arrow keys to rotate</span><span>Simplified geometry · no collision information</span></div>
-        <div class="joint-grid" id="joints"></div>
-      </div>
-    </details>
     <footer><span>Sawyer A · Web interface</span><span>Closing, refreshing, or losing this page for 3 seconds ends its control session. Reconnect and recalibrate to resume.</span><span>Local Web operator station.</span></footer>
   </main>
   <dialog id="folderDialog"><div class="card-heading"><h2>Choose a folder on A</h2><button id="folderClose" aria-label="Close folder picker">Close</button></div><p class="hint">Files are saved on the computer running the A service.</p><div class="input-action"><input id="folderPath" aria-label="Folder path"><button id="folderGo">Go</button><button id="folderUp">Up</button></div><div id="folderRoots" class="folder-roots"></div><div id="folderList" class="folder-list"></div><p id="folderError" class="inline-error" hidden></p><button id="folderChoose" class="primary wide">Use this folder</button></dialog>

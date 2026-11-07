@@ -30,10 +30,12 @@ from .a_timing import INPUT_MAX_AGE_S, INPUT_FUTURE_TOLERANCE_NS, IK_TASK_TIMEOU
 class Operator:
     def __init__(self, robot, quest, cameras, output, hz=50, position_scale=1.0,
                  motion=None, trajectory=None, gazebo_max_acceleration_rad_s2=None,
-                 motion_profile=None, joint_protection=True):
+                 motion_profile=None, joint_protection=True, required_cameras=None):
         if not 1 <= hz <= 120 or not np.isfinite(position_scale) or position_scale <= 0:
             raise ValueError("invalid operator parameters")
         self.robot, self.quest, self.cameras = robot, quest, cameras
+        # Names that must be live before a recording may start (real-arm collection).
+        self.required_cameras = list(required_cameras or [])
         self.output = Path(output)
         self.hz, self.scale = hz, position_scale
         self.ik_period_ns = int(np.ceil(1e9/hz))
@@ -278,7 +280,7 @@ class Operator:
                     continue
                 command_seq = receipt.get("execution_seq", receipt["seq"])
                 self.episode.command(dict(receipt, seq=command_seq), info["segment"],
-                                     info["offset"], info["uncertainty"])
+                                     info["offset"], info["uncertainty"], target=info.get("target"))
                 self.episode.event("submitted", command_seq=command_seq,
                                    source_command_seq=receipt["seq"],
                                    submitted_q=receipt["q"],
@@ -339,8 +341,18 @@ class Operator:
         batch = dict(name=name, count=count, seconds=seconds, pause=pause, reset_between=reset_between,
                      task=str(options.get("task", "")),
                      root=str(Path(options.get("root", self.output)).expanduser().resolve()))
+        names = {c.name for c in self.cameras}
+        missing = [n for n in self.required_cameras if n not in names]
+        if missing:
+            raise RuntimeError("Recording requires cameras: " + ", ".join(missing)
+                               + ". Enable camera recording and check the camera connections.")
         for camera in self.cameras:
-            camera.latest()
+            try:
+                camera.latest()
+            except RuntimeError as exc:
+                raise RuntimeError("Camera %s is not delivering frames; recording not started: %s"
+                                   % (camera.name, exc)) from exc
+        initial_state = self._initial_state()
         if automatic_name or batch != self.batch:
             root = Path(batch["root"])
             root.mkdir(parents=True, exist_ok=True)
@@ -361,6 +373,7 @@ class Operator:
             self.saved_seconds = 0.
         if self.saved_count >= count:
             raise RuntimeError("Batch target reached. Set a new batch name.")
+        self._attach_reset_info(initial_state)
         self.attempt_count += 1
         self.commands.clear()
         self.record_started = time.monotonic()
@@ -387,9 +400,11 @@ class Operator:
             "quest_epoch": self.epoch, "backend": self.robot.hello["backend"],
             "quest_ingress_schema": 1 if hasattr(self.quest, "set_recording_sink") else None,
             "batch": batch, "attempt": self.attempt_count,
-            "camera_config": [{"name": c.name, "device": c.device, "width": c.width,
-                               "height": c.height, "fps": c.fps, "backend": c.backend}
-                              for c in self.cameras],
+            "initial_state": initial_state,
+            "feedback_stream": (dict(self.robot.feedback_stream_status)
+                                if hasattr(self.robot, "feedback_stream_status")
+                                else {"enabled": False, "reason": "client_lacks_feedback_stream"}),
+            "camera_config": [self._camera_config(c) for c in self.cameras],
         }, [c.name for c in self.cameras], fps={c.name:c.fps for c in self.cameras})
         for camera in self.cameras:
             camera.set_sink(self.episode.frame)
@@ -399,6 +414,67 @@ class Operator:
         if hasattr(self.quest, "set_recording_sink"):
             self.quest.set_recording_sink(self.episode.event)
         self._status(message="Recording started; teleop remains independent", recording_error="")
+
+    @staticmethod
+    def _camera_config(camera):
+        def value(key):
+            item = getattr(camera, key, None)
+            return dict(item) if isinstance(item, dict) else item
+        return {"name": camera.name, "label": value("label"), "device": camera.device,
+                "width": camera.width, "height": camera.height, "fps": camera.fps,
+                "source_fps": value("source_fps"), "backend": camera.backend,
+                "controls": value("controls"), "measured_fps": value("measured_fps"),
+                "driver_stats": value("driver_stats"),
+                # No calibration exists yet; keep the keys so later data can fill them.
+                "intrinsics": None, "extrinsics": None}
+
+    def _initial_state(self, max_age_s=.1):
+        """Fresh robot state at recording start; refuse to start on stale feedback."""
+        state = self.robot.snapshot()
+        if state.get("age_s", 0.) > max_age_s:
+            raise RuntimeError("Robot feedback is %.0f ms old (limit %.0f ms); recording not started."
+                               % (state["age_s"]*1000, max_age_s*1000))
+        sample = state["sample"]
+        offset = state.get("clock_offset_ns") or 0
+        result = {"a_ns": ns(), "feedback_age_ms": state.get("age_s", 0.)*1000,
+                  "source_seq": sample.get("seq"),
+                  "captured_ns": sample.get("captured_ns", 0)+offset,
+                  "source_stamp": sample.get("source_stamp"),
+                  "pose_source_stamp": sample.get("pose_source_stamp"),
+                  "joint_names": list(self.robot.hello.get("joints") or []),
+                  "q": list(sample["q"]), "dq": list(sample.get("dq") or []),
+                  "eef_pos": list(sample["pose"]["p"]), "eef_quat": list(sample["pose"]["q"]),
+                  "eef_twist": sample.get("twist"), "gripper": sample.get("gripper"),
+                  "backend": self.robot.hello.get("backend")}
+        return result
+
+    def _attach_reset_info(self, initial_state):
+        """After a between-episode Reset arm: its target and the arrival error."""
+        if not (self.batch.get("reset_between") and self.attempt_count):
+            return  # First episode of a batch starts wherever the arm is.
+        try:
+            target = self._reset_target()
+            initial_state["reset"] = {
+                "target_q": list(target), "completed": bool(self.reset_completed),
+                "max_abs_error_rad": float(np.max(np.abs(np.subtract(initial_state["q"], target))))}
+        except (ValueError, TypeError) as exc:
+            initial_state["reset"] = {"error": str(exc)}
+
+    def _check_cameras_live(self):
+        """End the episode (kept, marked incomplete) and stop the batch if a camera is lost."""
+        if not self.episode:
+            return
+        from .recording import CAMERA_LOST_S
+        for camera in self.cameras:
+            try:
+                camera.latest(CAMERA_LOST_S)
+            except RuntimeError as exc:
+                self.episode.event("camera_lost", camera=camera.name, error=str(exc))
+                self._stop_batch()
+                self._finish(True, {"camera_lost": camera.name})
+                self._record_error("Camera %s delivered no frame for %.0f s; episode kept as incomplete "
+                                   "and batch stopped." % (camera.name, CAMERA_LOST_S))
+                return
 
     def _stop_batch(self):
         self.auto_recording = False
@@ -423,13 +499,13 @@ class Operator:
         self.review, self.episode = self.episode, None
         self._status(message="Episode ended; processing data")
 
-    def _finish(self, save):
+    def _finish(self, save, details=None):
         if self.finishing:
             return
         self._end_recording()
         if self.review:
-            self.review.finish(save, {"holding": False, "capture_closed": True,
-                                      "reason": "explicit_recording_end"})
+            self.review.finish(save, dict({"holding": False, "capture_closed": True,
+                                           "reason": "explicit_recording_end"}, **(details or {})))
             self.finishing, self.review = self.review, None
             self.finish_save = save
             self.next_record_at = time.monotonic()+self.batch["pause"] if self.auto_recording else 0.
@@ -438,19 +514,30 @@ class Operator:
     def _finish_poll(self):
         if self.finishing and self.finishing.done.is_set():
             finished, self.finishing = self.finishing, None
+            quality = (finished.metadata.get("quality") or {}).get("status")
+            # Kept on disk for inspection, but a lost camera never counts toward the batch.
+            incomplete = finished.result not in (None, "discarded") and quality == "incomplete"
             if finished.result == "discarded":
                 self.discarded_count += 1
-            elif finished.result and not finished.error:
+            elif finished.result and not finished.error and not incomplete:
                 self.saved_count += 1
                 self.saved_seconds += self.record_elapsed
-            if finished.error or not finished.result or self.saved_count >= self.batch["count"]:
+            if incomplete:
+                self.auto_recording = False
+                self.next_record_at = 0.
+                self._record_error("Episode kept but not counted (quality incomplete: "
+                                   + ", ".join(finished.metadata["quality"].get("reasons", [])) + "); batch stopped.")
+                self._status(last_result=str(finished.result), last_quality=finished.metadata.get("quality"))
+            elif finished.error or not finished.result or self.saved_count >= self.batch["count"]:
                 self.auto_recording = False
                 self.next_record_at = 0.
             elif self.auto_recording and self.batch.get("reset_between"):
                 # The interval starts only after the arm is confirmed at the Reset pose.
                 self.batch_reset = "pending"
                 self.next_record_at = float("inf")
-            if finished.result == "discarded":
+            if incomplete:
+                pass
+            elif finished.result == "discarded":
                 self._status(message="Episode discarded"+("; batch stopped due to a recording error" if finished.error else ""),
                              last_result="discarded", recording_error="")
             elif finished.error or not finished.result:
@@ -464,7 +551,11 @@ class Operator:
             else:
                 message = ("Batch target reached" if self.saved_count >= self.batch["count"] else
                            "Episode saved" if self.auto_recording else "Episode saved; batch stopped")
-                self._status(message=message, last_result=str(finished.result), recording_error="")
+                quality_info = finished.metadata.get("quality") or {}
+                if quality_info.get("status") == "degraded":
+                    message += " (quality degraded: " + ", ".join(quality_info.get("reasons", [])[:3]) + ")"
+                self._status(message=message, last_result=str(finished.result), recording_error="",
+                             last_quality=quality_info)
             try:
                 destination = Path(self.batch["root"])/self.batch["name"]
                 temporary = destination/"batch.json.tmp"
@@ -727,6 +818,7 @@ class Operator:
                 self._finish("save" in actions)
             elif "start_recording" in actions:
                 self._start_recording(parameters.get("start_recording", {}), value)
+            self._check_cameras_live()
             if self.episode and time.monotonic()-self.record_started >= self.batch["seconds"]:
                 self._finish(True)
             if self.batch_reset == "active" and self.resetting is None:
@@ -747,6 +839,13 @@ class Operator:
             self.next_record_at = 0.
             self._record_error("Recording operation failed; batch stopped: "+str(exc))
         self._record_status()
+        # Every accepted B feedback message (recording only). Drained every loop so
+        # rows from before an episode never pile up; kept only while recording.
+        drain = getattr(self.robot, "drain_feedback_stream", None)
+        if drain is not None:
+            rows, _ = drain()
+            if self.episode:
+                self.episode.stream(rows)
         try:
             state = self.robot.snapshot()
             self.robot.gripper_observation(diagnostics["hands"]["r"]["trigger"])

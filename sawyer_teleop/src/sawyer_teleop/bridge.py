@@ -15,6 +15,7 @@ from .joint_protection import (CAPABILITY, parse_options, check_jump, check_dest
 from .direct_pose import DIRECT_POSE_MODE, accept_pose, pose_tick
 from .intera_cartesian import MODE as CARTESIAN_MODE, validate_send_hz
 from .rates import EventRate
+from .feedback_stream import SCHEMA as FEEDBACK_STREAM_SCHEMA
 
 
 
@@ -190,6 +191,7 @@ class BridgeCore:
             self.reason = "release_to_arm"
             self.pause_details = None
             self.events.clear()
+            self.feedback_stream_enabled = False  # Opt-in per session (recording only).
             self.gripper_observation = None
             self.last_target = self.last_submission = None
             self.trajectory = self.active_target = None
@@ -214,6 +216,7 @@ class BridgeCore:
                     "command_timeout_s": self.command_timeout_ns/1e9,
                     "intera_cartesian": native_capability,
                     "joint_protection": dict(CAPABILITY),
+                    "feedback_stream": FEEDBACK_STREAM_SCHEMA if self._has_feedback_stream() else None,
                     "joint_trajectory": {"algorithm": JointTrajectory.algorithm,
                                          "control_hz": self.control_hz,
                                          "source_sample_timing": True,
@@ -278,9 +281,26 @@ class BridgeCore:
         self._event(reason, context)
         return confirmed
 
+    def _has_feedback_stream(self):
+        return callable(getattr(self.backend, "drain_feedback_stream", None))
+
+    def drain_feedback_stream(self):
+        """Rows accepted since the last call, for the session that opted in; else None.
+
+        Called by the server's tick thread after ``tick()``; it never touches control state.
+        """
+        with self.lock:
+            if not (self.session and getattr(self, "feedback_stream_enabled", False)):
+                return None
+            rows, dropped = self.backend.drain_feedback_stream()
+            if not rows and not dropped:
+                return None
+            return {"schema": FEEDBACK_STREAM_SCHEMA, "rows": rows, "dropped": dropped}
+
     def disconnect(self, session):
         with self.lock:
             if self.session == session:
+                self.feedback_stream_enabled = False
                 self.scene_cancel.set()
                 try:
                     if self.armed:
@@ -307,6 +327,16 @@ class BridgeCore:
                 return None  # Display only: never calls the robot backend.
             if kind == "ping":
                 return {"b_ns": self.clock()}
+            if kind == "feedback_stream":
+                enabled = msg.get("enabled")
+                if type(enabled) is not bool:
+                    raise ProtocolError("invalid_feedback_stream_request")
+                if enabled and not self._has_feedback_stream():
+                    raise ProtocolError("feedback_stream_unavailable")
+                if enabled and not self.feedback_stream_enabled:
+                    self.backend.clear_feedback_stream()  # Rows start at this session.
+                self.feedback_stream_enabled = enabled
+                return {"enabled": enabled, "schema": FEEDBACK_STREAM_SCHEMA}
             if kind == "hold":
                 confirmed = self._hold(str(msg.get("reason", "operator_hold"))[:80])
                 return {"generation": self.generation, "holding": confirmed,

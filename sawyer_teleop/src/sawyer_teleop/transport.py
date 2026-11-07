@@ -7,6 +7,7 @@ import time
 
 from .protocol import Decoder, ProtocolError, close_socket, configure_socket, encode
 from .rates import EventRate
+from .feedback_stream import merge_stream
 
 
 class Connection:
@@ -30,13 +31,18 @@ class Connection:
             thread.start()
         return self
 
-    def send(self, msg, latest=None, clear_latest=False):
+    def send(self, msg, latest=None, clear_latest=False, merge=None):
+        """``merge`` names a field of a latest-slot message whose rows must survive replacement."""
         with self.condition:
             if self.closed.is_set():
                 raise ConnectionError(self.error or "connection closed")
             if clear_latest:
                 self.latest.clear()
             if latest is not None:
+                previous = self.latest.get(latest)
+                if merge and previous and previous.get(merge):
+                    combined = merge_stream(previous[merge], msg.get(merge))
+                    msg = dict(msg, **{merge: combined})
                 self.latest[latest] = msg
             elif len(self.reliable) < self.capacity:
                 self.reliable.append(msg)

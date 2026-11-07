@@ -1,6 +1,7 @@
 """Offline exports must never overwrite or remove another writer's files."""
 import json
 from pathlib import Path
+import shutil
 
 import h5py
 import numpy as np
@@ -40,6 +41,27 @@ def test_previous_partial_is_preserved_and_export_uses_its_own_file(batch, tmp_p
         assert data['data'].attrs['total'] == 10
         np.testing.assert_array_equal(data['data/demo_0/timestamps_ns'][:], np.arange(1,11)*20_000_000)
     assert list(tmp_path.glob('*.partial')) == [partial]
+
+
+def test_export_excludes_quality_incomplete_even_when_capture_is_complete(batch, tmp_path):
+    incomplete = batch/'episode_camera_lost'/'raw.hdf5'
+    incomplete.parent.mkdir()
+    shutil.copyfile(batch/'episode_test'/'raw.hdf5', incomplete)
+    reasons = ['wrist:camera_lost']
+    with h5py.File(incomplete, 'r+') as data:
+        data.attrs['quality'] = json.dumps({'status': 'incomplete', 'reasons': reasons})
+        data['commands/q'][:] = 10.  # Excluded rows must stay out of normalization, too.
+
+    output = tmp_path/'dataset.hdf5'
+    result = dataset.export_dataset(batch, output)
+
+    assert result['episodes'] == result['demos'] == 1
+    assert result['excluded'] == [{'path': str(incomplete), 'reason': 'quality_incomplete',
+                                   'details': reasons}]
+    with h5py.File(output) as data:
+        assert data['data/demo_0'].attrs['source_episode'] == 'episode_test'
+        assert json.loads(data['data'].attrs['action_normalization'])['center'] == [0.]*7
+    assert incomplete.is_file()
 
 
 def test_concurrent_output_wins_without_being_overwritten(batch, tmp_path, monkeypatch):
