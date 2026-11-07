@@ -11,6 +11,35 @@
 
 地址填 **B 电脑**，不填机器人控制器地址。跨机时放行 A→B 的两个 TCP 端口。
 
+## 当前现场 A / B 启动流程（2026-11-02）
+
+用户确认 tele 已写好，现场按以下两端启动；本次记录中的“本机器”指 **B 端**，用户电脑为 **A 端**。
+
+| 端 | 登录用户与主机 | 启动目录 | 入口 |
+| --- | --- | --- | --- |
+| B（实验室执行端） | `k23114984@rll3-OptiPlex-7050` | `/home/k23114984/Lin/B-Lab-Ubuntu-20261102` | `bash Start-B.sh` |
+| A（用户操作端） | `endongsun@nmslap009113` | `/home/endongsun/Desktop/sawyer_teleoperation` | `bash Start-A.sh` |
+
+1. 先在 **B 端**终端运行：
+
+   ```bash
+   cd ~/Lin/B-Lab-Ubuntu-20261102/
+   bash Start-B.sh
+   ```
+
+   `~/Lin/` 下现场目录为 `B-Lab-Ubuntu-20261102`、`gripper-integration`、`lab-environment.txt`、`ws`；当前启动使用带日期的 B 部署目录。
+
+2. 再在 **A 端（用户电脑）**终端运行：
+
+   ```bash
+   cd ~/Desktop/sawyer_teleoperation/
+   bash Start-A.sh
+   ```
+
+   该目录包含 `Install-Quest.sh`、`sawyer-teleop`、`Start-A.sh`；日常启动使用顶层 `Start-A.sh`。
+
+两端启动后保持终端打开，A 网页连接、校准和握持操作见下文“遥操流程”。以上主机与路径来自用户现场记录。
+
 ## 启动 B
 
 ### Windows 仿真 B

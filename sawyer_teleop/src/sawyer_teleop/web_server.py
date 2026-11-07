@@ -24,7 +24,8 @@ ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
 
 class WebServer(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = False
+    # Permit immediate Unix restarts after TIME_WAIT; keep Windows exclusivity.
+    allow_reuse_address = os.name != 'nt'
     request_queue_size = 16
 
     def __init__(self, session, port=8780):

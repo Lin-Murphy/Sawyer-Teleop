@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import threading
@@ -15,6 +16,37 @@ from sawyer_teleop.web_server import WebServer, run_web
 from test_web import web, OWNER
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux TCP restart behavior')
+def test_web_can_restart_on_same_port_after_serving_a_request():
+    server = WebServer(object(), 0)
+    port = server.server_port
+    thread = threading.Thread(target=server.handle_request, daemon=True)
+    thread.start()
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=3) as client:
+            client.sendall(f'GET / HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\n\r\n'.encode())
+            # Let the server close first, leaving its port in TCP TIME_WAIT.
+            response = bytearray()
+            while chunk := client.recv(65536):
+                response.extend(chunk)
+            assert response.startswith(b'HTTP/1.0 200')
+    finally:
+        server.server_close()
+        thread.join(3)
+    replacement = WebServer(object(), port)
+    replacement.server_close()
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux TCP listener exclusivity')
+def test_web_cannot_bind_a_port_with_an_active_listener():
+    server = WebServer(object(), 0)
+    try:
+        with pytest.raises(OSError):
+            WebServer(object(), server.server_port)
+    finally:
+        server.server_close()
 
 
 def test_authenticated_reopen_does_not_change_control_owner(web):

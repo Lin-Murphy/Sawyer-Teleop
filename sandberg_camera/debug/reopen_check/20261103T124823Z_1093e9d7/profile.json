@@ -1,0 +1,41 @@
+{
+  "profile_version": 1,
+  "purpose": "VLA wrist camera; provisional until mounted focus/motion/FOV tests",
+  "device": "/dev/v4l/by-id/usb-0c45_USB20_Camera-video-index0",
+  "expected_driver": "gspca_sn9c20x",
+  "capture": {
+    "width": 640,
+    "height": 480,
+    "fourcc": "BA81",
+    "buffer_count": 1,
+    "warmup_frames": 60
+  },
+  "controls": {
+    "gain_automatic": 0,
+    "exposure": 300,
+    "gain": 10,
+    "red_balance": 33,
+    "blue_balance": 28,
+    "brightness": 127,
+    "contrast": 127,
+    "saturation": 127,
+    "hue": 0,
+    "gamma": 16,
+    "horizontal_flip": 0,
+    "vertical_flip": 0
+  },
+  "preprocessing": {
+    "crop_xywh": [
+      80,
+      0,
+      480,
+      480
+    ],
+    "output_size": [
+      224,
+      224
+    ],
+    "interpolation": "INTER_AREA",
+    "model_color_order": "RGB"
+  }
+}

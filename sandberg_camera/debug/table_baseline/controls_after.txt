@@ -1,0 +1,19 @@
+
+User Controls
+
+                     brightness 0x00980900 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000
+                       contrast 0x00980901 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000
+                     saturation 0x00980902 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000
+                            hue 0x00980903 (int)    : min=-180 max=180 step=1 default=0 value=0 flags=slider, 0x00001000
+                    red_balance 0x0098090e (int)    : min=0 max=127 step=1 default=40 value=40 flags=slider, 0x00001000
+                   blue_balance 0x0098090f (int)    : min=0 max=127 step=1 default=40 value=40 flags=slider, 0x00001000
+                          gamma 0x00980910 (int)    : min=0 max=255 step=1 default=16 value=16 flags=slider, 0x00001000
+                       exposure 0x00980911 (int)    : min=0 max=6016 step=1 default=51 value=960 flags=0x00001000
+                 gain_automatic 0x00980912 (bool)   : default=1 value=0 flags=update, 0x00001000
+                           gain 0x00980913 (int)    : min=0 max=28 step=1 default=0 value=0 flags=0x00001000
+                horizontal_flip 0x00980914 (bool)   : default=0 value=0 flags=0x00001000
+                  vertical_flip 0x00980915 (bool)   : default=0 value=0 flags=0x00001000
+
+JPEG Compression Controls
+
+            compression_quality 0x009d0903 (int)    : min=50 max=90 step=1 default=80 value=90 flags=0x00001000

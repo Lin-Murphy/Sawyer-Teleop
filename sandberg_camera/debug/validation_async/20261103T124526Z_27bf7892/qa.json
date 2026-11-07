@@ -1,0 +1,27 @@
+{
+  "frames": 901,
+  "bad_decodes_or_shapes": [],
+  "preprocessing_mismatches": [],
+  "static_abs_difference_p50_p95_max": [
+    1.843,
+    2.038,
+    2.231
+  ],
+  "largest_static_difference_frame": 498,
+  "profile_hash": "cb45f25c45724b7491a39c2eedff18c2db2a7becbe6dcee32c4ce32e76496712",
+  "saved_fps": 30.02,
+  "interval_ms_p50_p95_max": [
+    32.059,
+    36.091,
+    37.325
+  ],
+  "intervals_over_50ms": 0,
+  "brightness_p05_p50_p95": [
+    109.78,
+    110.53,
+    111.3
+  ],
+  "max_pending_writes": 5,
+  "reported_buffer_count": 3.0,
+  "PIL_RGB_matches_model_array": true
+}

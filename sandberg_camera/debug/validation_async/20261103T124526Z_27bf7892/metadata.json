@@ -1,0 +1,76 @@
+{
+  "profile_sha256": "cb45f25c45724b7491a39c2eedff18c2db2a7becbe6dcee32c4ce32e76496712",
+  "profile": {
+    "profile_version": 1,
+    "purpose": "VLA wrist camera; provisional until mounted focus/motion/FOV tests",
+    "device": "/dev/video4",
+    "expected_driver": "gspca_sn9c20x",
+    "capture": {
+      "width": 640,
+      "height": 480,
+      "fourcc": "BA81",
+      "buffer_count": 1,
+      "warmup_frames": 60
+    },
+    "controls": {
+      "gain_automatic": 0,
+      "exposure": 300,
+      "gain": 10,
+      "red_balance": 33,
+      "blue_balance": 28,
+      "brightness": 127,
+      "contrast": 127,
+      "saturation": 127,
+      "hue": 0,
+      "gamma": 16,
+      "horizontal_flip": 0,
+      "vertical_flip": 0
+    },
+    "preprocessing": {
+      "crop_xywh": [
+        80,
+        0,
+        480,
+        480
+      ],
+      "output_size": [
+        224,
+        224
+      ],
+      "interpolation": "INTER_AREA",
+      "model_color_order": "RGB"
+    }
+  },
+  "opencv_version": "4.13.0",
+  "timestamp_semantics": "Host monotonic time immediately after cap.read; NOT sensor exposure time",
+  "image_semantics": "images: 224x224 RGB PNG; source_images: 640x480 RGB PNG; cv2 encoding receives BGR",
+  "dataset_scope": "Camera-only diagnostic; robot state/actions are not recorded or synchronized",
+  "status": "complete",
+  "camera": {
+    "device": "/dev/video4",
+    "driver_info": "Driver Info:\n\tDriver name      : gspca_sn9c20x\n\tCard type        : USB20 Camera    \n\tBus info         : usb-0000:00:14.0-3\n\tDriver version   : 7.0.14\n\tCapabilities     : 0x85200001\n\t\tVideo Capture\n\t\tRead/Write\n\t\tStreaming\n\t\tExtended Pix Format\n\t\tDevice Capabilities\n\tDevice Caps      : 0x05200001\n\t\tVideo Capture\n\t\tRead/Write\n\t\tStreaming\n\t\tExtended Pix Format\n",
+    "format": "BA81",
+    "buffer_request_accepted": true,
+    "reported_buffer_count": 3.0,
+    "applied_controls": "gain_automatic: 0\nexposure: 300\ngain: 10\nred_balance: 33\nblue_balance: 28\nbrightness: 127\ncontrast: 127\nsaturation: 127\nhue: 0\ngamma: 16\nhorizontal_flip: 0\nvertical_flip: 0\n",
+    "format_info": "Format Video Capture:\n\tWidth/Height      : 640/480\n\tPixel Format      : 'BA81' (8-bit Bayer BGBG/GRGR)\n\tField             : None\n\tBytes per Line    : 640\n\tSize Image        : 307200\n\tColorspace        : sRGB\n\tTransfer Function : Default (maps to sRGB)\n\tYCbCr/HSV Encoding: Default (maps to ITU-R 601)\n\tQuantization      : Default (maps to Full Range)\n\tFlags             : \n"
+  },
+  "error": null,
+  "frames": 901,
+  "elapsed_seconds": 30.011,
+  "total_seconds_including_flush": 30.059,
+  "saved_fps": 30.02,
+  "submitted_frames": 901,
+  "max_pending_writes": 5,
+  "interval_ms_p50_p95_max": [
+    32.059,
+    36.091,
+    37.325
+  ],
+  "intervals_over_50ms": 0,
+  "image_mean_brightness_p05_p50_p95": [
+    109.78,
+    110.53,
+    111.3
+  ]
+}

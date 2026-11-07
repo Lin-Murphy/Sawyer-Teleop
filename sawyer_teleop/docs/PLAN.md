@@ -1,12 +1,27 @@
 # 项目状态
 
-更新：2026-10-29。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
+更新：2026-11-02。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
 
 > 2026-10-29 发布整理：Windows 入口合并为仓库根目录的 `Setup.cmd` / `Start-A.cmd` / `Start-B.cmd` / `Test.cmd`；
 > 文档合并为 SETUP / USAGE / TROUBLESHOOTING / DEVELOPMENT。下文历史条目里的旧脚本名（Install-Dev、Test-A、Stop-B、Install-Quest 等）、
 > 旧文档名和 `rog-local/`、`windows-local/artifacts/` 证据链接均指整理前的原作者本机环境，未随仓库发布。
 
 ## 当前决定
+
+### 记录现场 A / B 启动入口（2026-11-02）
+
+用户确认 tele 已写好，并明确本次记录中的“本机器”为 B 端：`k23114984@rll3-OptiPlex-7050`，在 `~/Lin/B-Lab-Ubuntu-20261102/` 运行 `bash Start-B.sh`。A 端为用户电脑 `endongsun@nmslap009113`，在 `~/Desktop/sawyer_teleoperation/` 运行顶层 `bash Start-A.sh`。按先 B、后 A 的顺序，将完整命令与现场目录列表写入 [USAGE](USAGE.md#当前现场-a--b-启动流程2026-11-02)。
+
+**仅文档记录，A、B 均无需更新运行代码；无配置、依赖、重启或重校准要求。** 主机与路径以用户提供内容为依据，本轮未执行启动命令。已核对文档中的路径、命令与用户记录一致，无本轮失败；不据此扩大为全部真机验收通过。后续启动沿用该现场入口，若部署目录或主机变化，再更新本记录。
+
+### Ubuntu A 快速重启遇到 Address already in use（2026-11-02）
+
+**仅更新 A 的 Web 监听器，B 无需更新；无配置 / 依赖 / 控制或录制语义变更。** 用户在 Start-A 绑定 127.0.0.1:8780 时遇到 Errno 98。检查时无残留监听进程；隔离随机端口真实 HTTP 请求后立即关闭并重绑，旧代码复现同错（1 failed / 1 passed），现场随后也观察到 8780 的 TIME_WAIT。Unix 启用 SO_REUSEADDR，Windows 保持原有设置；不启用端口共享，不删除锁、不终止其他实例。新增同端口快速重启和已有监听器仍拒绝第二次绑定的回归，相关 Web / 单实例 / 授权 / 会话测试 **27 passed**。
+旧版进程此前留下的 TIME_WAIT 仍需首次自然到期，初次启动新代码因旧连接尚在再次失败，记录后有界等待释放；随后默认 8780 启动成功，重复运行实际 Start-A 命令返回 Reusing，浏览器验证页面正常。只启动本机 A，未连接 B 或执行机器人动作；后续连接仍按原流程重连 / 校准。证据：[修复前后测试和端口状态](../../ubuntu-local/artifacts/a-restart-20261102/)。
+
+### Ubuntu A 连接实机时报 feedback_latest_expired（2026-11-02，只读诊断）
+
+**A、B 运行代码 / 配置 / 依赖均未修改，未重启服务或发送机器人指令。** 用户在 18:29:44 / 18:29:55 连接 intera `10.101.119.182` 立即失败。使用独立观察者身份只读获取现有 A 的 `/api/state`，没有接管网页或新建 B 会话：Quest USB 已 Authorized；保留的 B 反馈 `source_valid=false`、`source_fault=joint_source_time_invalid`，最后一帧递送上界约 7.25 ms，A/B 最新反馈期限均为 100 ms。源反馈未通过时间检查是已证实原因，具体为超前、过期还是无效 stamp 尚无 B 端原始消息证据；不能把断开后的累计年龄或零 capture 占位算出的巨大值当作真实传输延迟。A 先检查年龄再检查源 fault，因此界面只显示 feedback_latest_expired。当前源码允许最多超前 50 ms、关节数据旧于 100 ms 仍拒绝，现场 B 的实际版本尚未核对。原始本机状态：[本轮诊断](../../ubuntu-local/artifacts/feedback-expired-20261102/a-state.json)。下一步在 B 的现有 ROS 环境只读检查 `/robot/joint_states` 消息延迟与机器人/B 时钟同步，确认实际时间差后处理；本轮没有放宽期限或宣称修复。
 
 ### Demo 反馈源时间允许最多 50 ms 超前（2026-11-02）
 

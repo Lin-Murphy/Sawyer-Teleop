@@ -1,0 +1,139 @@
+[
+  {
+    "name": "e240_g12",
+    "controls": {
+      "gain_automatic": 0,
+      "exposure": 240,
+      "gain": 12,
+      "red_balance": 40,
+      "blue_balance": 40
+    },
+    "mean": 96.87,
+    "median": 81.0,
+    "p05_p50_p95": [
+      19.0,
+      81.0,
+      237.0
+    ],
+    "dark_pct": 5.3,
+    "bright_pct": 0.0,
+    "channel_clip_pct": 0.0,
+    "bgr_mean": [
+      102.11,
+      91.88,
+      104.66
+    ],
+    "center_mean": 97.47,
+    "sharpness": 53.1,
+    "fps": 27.84,
+    "interval_ms_p50_p95_max": [
+      32.07,
+      36.07,
+      37.19
+    ],
+    "temporal_mad": 2.04,
+    "path": "/home/endongsun/Desktop/sawyer_teleoperation/sandberg_camera/debug/wrist_tune/e240_g12.png",
+    "applied_controls": "\nUser Controls\n\n                     brightness 0x00980900 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                       contrast 0x00980901 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                     saturation 0x00980902 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                            hue 0x00980903 (int)    : min=-180 max=180 step=1 default=0 value=0 flags=slider, 0x00001000\n                    red_balance 0x0098090e (int)    : min=0 max=127 step=1 default=40 value=40 flags=slider, 0x00001000\n                   blue_balance 0x0098090f (int)    : min=0 max=127 step=1 default=40 value=40 flags=slider, 0x00001000\n                          gamma 0x00980910 (int)    : min=0 max=255 step=1 default=16 value=16 flags=slider, 0x00001000\n                       exposure 0x00980911 (int)    : min=0 max=6016 step=1 default=51 value=240 flags=0x00001000\n                 gain_automatic 0x00980912 (bool)   : default=1 value=0 flags=update, 0x00001000\n                           gain 0x00980913 (int)    : min=0 max=28 step=1 default=0 value=12 flags=0x00001000\n                horizontal_flip 0x00980914 (bool)   : default=0 value=0 flags=0x00001000\n                  vertical_flip 0x00980915 (bool)   : default=0 value=0 flags=0x00001000\n\nJPEG Compression Controls\n\n            compression_quality 0x009d0903 (int)    : min=50 max=90 step=1 default=80 value=90 flags=0x00001000\n"
+  },
+  {
+    "name": "e360_g6",
+    "controls": {
+      "exposure": 360,
+      "gain": 6
+    },
+    "mean": 96.98,
+    "median": 81.0,
+    "p05_p50_p95": [
+      19.0,
+      81.0,
+      236.0
+    ],
+    "dark_pct": 5.24,
+    "bright_pct": 0.0,
+    "channel_clip_pct": 0.0,
+    "bgr_mean": [
+      102.46,
+      91.57,
+      105.51
+    ],
+    "center_mean": 97.65,
+    "sharpness": 48.87,
+    "fps": 30.8,
+    "interval_ms_p50_p95_max": [
+      32.09,
+      36.14,
+      64.38
+    ],
+    "temporal_mad": 1.61,
+    "path": "/home/endongsun/Desktop/sawyer_teleoperation/sandberg_camera/debug/wrist_tune/e360_g6.png",
+    "applied_controls": "\nUser Controls\n\n                     brightness 0x00980900 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                       contrast 0x00980901 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                     saturation 0x00980902 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                            hue 0x00980903 (int)    : min=-180 max=180 step=1 default=0 value=0 flags=slider, 0x00001000\n                    red_balance 0x0098090e (int)    : min=0 max=127 step=1 default=40 value=40 flags=slider, 0x00001000\n                   blue_balance 0x0098090f (int)    : min=0 max=127 step=1 default=40 value=40 flags=slider, 0x00001000\n                          gamma 0x00980910 (int)    : min=0 max=255 step=1 default=16 value=16 flags=slider, 0x00001000\n                       exposure 0x00980911 (int)    : min=0 max=6016 step=1 default=51 value=360 flags=0x00001000\n                 gain_automatic 0x00980912 (bool)   : default=1 value=0 flags=update, 0x00001000\n                           gain 0x00980913 (int)    : min=0 max=28 step=1 default=0 value=6 flags=0x00001000\n                horizontal_flip 0x00980914 (bool)   : default=0 value=0 flags=0x00001000\n                  vertical_flip 0x00980915 (bool)   : default=0 value=0 flags=0x00001000\n\nJPEG Compression Controls\n\n            compression_quality 0x009d0903 (int)    : min=50 max=90 step=1 default=80 value=90 flags=0x00001000\n"
+  },
+  {
+    "name": "e480_g6",
+    "controls": {
+      "exposure": 480,
+      "gain": 6
+    },
+    "mean": 119.8,
+    "median": 107.0,
+    "p05_p50_p95": [
+      26.0,
+      107.0,
+      237.0
+    ],
+    "dark_pct": 4.02,
+    "bright_pct": 0.0,
+    "channel_clip_pct": 0.0,
+    "bgr_mean": [
+      126.9,
+      114.02,
+      128.42
+    ],
+    "center_mean": 124.81,
+    "sharpness": 64.68,
+    "fps": 30.74,
+    "interval_ms_p50_p95_max": [
+      32.06,
+      36.07,
+      68.19
+    ],
+    "temporal_mad": 1.67,
+    "path": "/home/endongsun/Desktop/sawyer_teleoperation/sandberg_camera/debug/wrist_tune/e480_g6.png",
+    "applied_controls": "\nUser Controls\n\n                     brightness 0x00980900 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                       contrast 0x00980901 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                     saturation 0x00980902 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                            hue 0x00980903 (int)    : min=-180 max=180 step=1 default=0 value=0 flags=slider, 0x00001000\n                    red_balance 0x0098090e (int)    : min=0 max=127 step=1 default=40 value=40 flags=slider, 0x00001000\n                   blue_balance 0x0098090f (int)    : min=0 max=127 step=1 default=40 value=40 flags=slider, 0x00001000\n                          gamma 0x00980910 (int)    : min=0 max=255 step=1 default=16 value=16 flags=slider, 0x00001000\n                       exposure 0x00980911 (int)    : min=0 max=6016 step=1 default=51 value=480 flags=0x00001000\n                 gain_automatic 0x00980912 (bool)   : default=1 value=0 flags=update, 0x00001000\n                           gain 0x00980913 (int)    : min=0 max=28 step=1 default=0 value=6 flags=0x00001000\n                horizontal_flip 0x00980914 (bool)   : default=0 value=0 flags=0x00001000\n                  vertical_flip 0x00980915 (bool)   : default=0 value=0 flags=0x00001000\n\nJPEG Compression Controls\n\n            compression_quality 0x009d0903 (int)    : min=50 max=90 step=1 default=80 value=90 flags=0x00001000\n"
+  },
+  {
+    "name": "e360_g10_wb35",
+    "controls": {
+      "exposure": 360,
+      "gain": 10,
+      "red_balance": 35,
+      "blue_balance": 35
+    },
+    "mean": 122.16,
+    "median": 109.0,
+    "p05_p50_p95": [
+      28.0,
+      109.0,
+      236.0
+    ],
+    "dark_pct": 3.91,
+    "bright_pct": 0.0,
+    "channel_clip_pct": 0.0,
+    "bgr_mean": [
+      125.73,
+      118.83,
+      127.36
+    ],
+    "center_mean": 127.58,
+    "sharpness": 71.3,
+    "fps": 31.3,
+    "interval_ms_p50_p95_max": [
+      32.11,
+      36.03,
+      36.71
+    ],
+    "temporal_mad": 1.97,
+    "path": "/home/endongsun/Desktop/sawyer_teleoperation/sandberg_camera/debug/wrist_tune/e360_g10_wb35.png",
+    "applied_controls": "\nUser Controls\n\n                     brightness 0x00980900 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                       contrast 0x00980901 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                     saturation 0x00980902 (int)    : min=0 max=255 step=1 default=127 value=127 flags=slider, 0x00001000\n                            hue 0x00980903 (int)    : min=-180 max=180 step=1 default=0 value=0 flags=slider, 0x00001000\n                    red_balance 0x0098090e (int)    : min=0 max=127 step=1 default=40 value=35 flags=slider, 0x00001000\n                   blue_balance 0x0098090f (int)    : min=0 max=127 step=1 default=40 value=35 flags=slider, 0x00001000\n                          gamma 0x00980910 (int)    : min=0 max=255 step=1 default=16 value=16 flags=slider, 0x00001000\n                       exposure 0x00980911 (int)    : min=0 max=6016 step=1 default=51 value=360 flags=0x00001000\n                 gain_automatic 0x00980912 (bool)   : default=1 value=0 flags=update, 0x00001000\n                           gain 0x00980913 (int)    : min=0 max=28 step=1 default=0 value=10 flags=0x00001000\n                horizontal_flip 0x00980914 (bool)   : default=0 value=0 flags=0x00001000\n                  vertical_flip 0x00980915 (bool)   : default=0 value=0 flags=0x00001000\n\nJPEG Compression Controls\n\n            compression_quality 0x009d0903 (int)    : min=50 max=90 step=1 default=80 value=90 flags=0x00001000\n"
+  }
+]
