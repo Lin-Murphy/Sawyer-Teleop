@@ -10,8 +10,8 @@ from .neutral import read_neutral_pose
 from .kinematics_model import read_kinematics_model
 
 
-# Bounded robot/B clock skew allowance for the lab demo. Motion references
-# retain their original monotonic deadlines; this is not clock correction.
+# Bounded residual robot/B clock skew allowance for the lab demo, applied after the
+# measured robot clock (robot_clock.py). Motion references retain their monotonic deadlines.
 FEEDBACK_FUTURE_TOLERANCE_S = .05
 
 
@@ -32,6 +32,18 @@ class InteraBackend:
             rospy.init_node("sawyer_teleop_bridge", anonymous=True, disable_signals=True)
         if rospy.get_param("/use_sim_time", False):
             raise RuntimeError("Real robot backend cannot use a simulation clock")
+        # Measure the robot clock before subscribing, then keep it fresh in the
+        # background so a robot reboot no longer needs a manual time-sync recovery.
+        from .robot_clock import RobotClock
+        self.robot_clock = RobotClock(urlparse(os.environ["ROS_MASTER_URI"]).hostname)
+        if self.robot_clock.measure_once():
+            offset, uncertainty = self.robot_clock.estimate()
+            print("Robot clock measured via NTP: robot - B = %+.1f ms (+/- %.1f ms); "
+                  "feedback times use the measured robot clock." % (offset*1000, uncertainty*1000), flush=True)
+        else:
+            print("WARNING: robot clock NTP measurement failed (%s); using B's clock until it succeeds. "
+                  "Retrying every 2 s." % self.robot_clock.error, flush=True)
+        self.robot_clock.start()
         active_tip = rospy.get_param("/robot/limb/right/tip_name", tip_frame)
         if active_tip != tip_frame:
             raise RuntimeError("Tool frame mismatch: " + str(active_tip))
@@ -89,10 +101,20 @@ class InteraBackend:
                 "gripper_model": "Dynamixel external" if getattr(self, "gripper", None) else None,
                 "command_mode": "POSITION_MODE"}
 
+    def _source_now(self):
+        """Robot-clock "now" for source stamps, and its measurement bound (0 if unmeasured)."""
+        now = self.ros.Time.now().to_sec()
+        clock = getattr(self, "robot_clock", None)
+        estimate = clock.estimate() if clock is not None else None
+        if estimate is None:
+            return now, 0.
+        return now + estimate[0], estimate[1]
+
     def _accept(self, name, stamp, update):
         with self.lock:
-            source_now = self.ros.Time.now().to_sec()
-            age = source_now - stamp
+            source_now, uncertainty = self._source_now()
+            # Conservative: the measurement bound only ever makes data look older.
+            age = source_now - stamp + uncertainty
             limit = self.state_timeout if name in ("joint", "pose") else self.status_timeout
             if (not math.isfinite(source_now) or not math.isfinite(stamp) or stamp <= 0
                     or stamp > source_now + FEEDBACK_FUTURE_TOLERANCE_S or age > limit):
@@ -167,7 +189,7 @@ class InteraBackend:
             # its creation time is not a periodic feedback heartbeat.
             stamp = msg.time.to_sec()
             with self.lock:
-                source_now = self.ros.Time.now().to_sec()
+                source_now, _ = self._source_now()
                 if (not math.isfinite(source_now) or not math.isfinite(stamp) or stamp <= 0
                         or stamp > source_now + FEEDBACK_FUTURE_TOLERANCE_S):
                     self.invalid["cuff"] = "cuff_source_time_invalid"
@@ -232,6 +254,8 @@ class InteraBackend:
                     "invalid": dict(self.invalid), "source_stamps": dict(self.stamps),
                     "received_ns": dict(self.received), "captured_ns": dict(self.captured),
                     "cuff": self.cuff, "collision": self.collision,
+                    "robot_clock": (self.robot_clock.describe()
+                                    if getattr(self, "robot_clock", None) is not None else None),
                 },
             }
 
@@ -267,6 +291,8 @@ class InteraBackend:
         return vector([values[name] for name in JOINTS], 7)
 
     def close(self):
+        if getattr(self, "robot_clock", None) is not None:
+            self.robot_clock.close()
         native = getattr(self, "cartesian", None)
         if native is not None and native.command_sent:
             try:

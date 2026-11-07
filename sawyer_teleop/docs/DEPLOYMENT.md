@@ -1,6 +1,22 @@
 # 实验室 B 部署补充
 
-## 再次出现反馈时间错误：现场快速恢复命令
+## 机器人时钟自动测量（2026-11-07 起，取代下方手动恢复）
+
+B 启动时及运行中每 2 秒，用普通 UDP（无需 sudo、不改系统配置）向 `SAWYER_ROBOT_HOST`
+（即 ROS master 主机，`sawyer.local`）的 NTP 服务测量“机器人时钟 − B 时钟”，
+并用实测机器人时钟校验 joint / pose / collision / cuff 的源时间戳。机器人重启后的
+几十毫秒时钟差会在下一次测量（≤2 s）后自动消除，不再需要重启 timesyncd 或手动跑命令；
+A 断开重连即可。启动 B 时终端会打印一行：
+
+- `Robot clock measured via NTP: robot - B = +85.0 ms (+/- 0.3 ms)…`：已自动补偿；
+- `WARNING: robot clock NTP measurement failed (…)`：暂按 B 自身时钟（旧行为），后台每 2 s 重试。
+
+门限不变：残差超前 50 ms、joint / pose 旧于 100 ms、collision 旧于 500 ms 仍拒绝；测量误差
+（往返一半）只会让数据显得更旧。往返 > 50 ms 或超过 10 s 未成功测量时不使用补偿。
+当前测量值写在每条反馈日志的 `feedback_diagnostics.robot_clock`。只有出现 WARNING 且
+A 仍报 `feedback_latest_expired` 时，才按下面的手动流程排查。
+
+## 再次出现反馈时间错误：现场快速恢复命令（手动后备）
 
 适用：重启机械臂后出现 `feedback_latest_expired` 或 `*_source_time_invalid`，
 且本机已经配置好跟随 `sawyer.local` 的 NTP。以下是恢复尝试；相同页面错误也可能
@@ -234,6 +250,17 @@ PollIntervalMinSec=16s，PollIntervalMaxSec=32s。NTP不是deploy的一部分。
 下面是本次最新报错和终端输出：
 【粘贴页面报错、B启动输出、timesync-status和最新反馈日志】
 ```
+
+## A 端两路相机（Windows，2026-11-07）
+
+Web A 启动后常驻采集 `operator.json` 的 `cameras`，在 Live status 下方并排显示；勾选 Record cameras 时录制复用同一采集。
+
+- **RealSense D435（workspace）**：按 DirectShow 名 `Intel(R) RealSense(TM) Depth Camera 435 with RGB Module RGB` 打开，只取 RGB，免装驱动。找不到名字即报错，不会回退到笔记本自带摄像头。
+- **Sandberg 腕部相机（0c45:627b）**：Windows 没有可用签名驱动，用系统自带 WinUSB + 项目内用户态读取器（`backend: "sn9c20x"`）。首次或**换了 USB 口**后需在设备管理器指定一次：
+  “USB20 Camera” → 更新驱动程序 → 浏览我的电脑 → 让我从列表中选取 → Universal Serial Bus devices → 厂商 / 型号均选 “WinUsb Device” → 警告点“是”。
+  **必须直接插电脑 USB 口**：经 WCH 扩展坞（1a86:8095）时高带宽传输约 2 s 后掉线。成像参数在 `wrist.controls`，与 `sandberg_camera/camera_profile.json` 一致。
+- 依赖：Windows 运行时需 `libusb1==3.4.0`（`Setup.cmd` 会按 pyproject 安装；`Test.cmd env` 自检会导入 `usb1`）。
+- 同一相机同一时间只能被一个 Web A 占用；改配置或代码后先在原 Start-A 窗口 Ctrl+C 再重启。
 
 ## 实验室 Reset arm 姿态（2026-11-07）
 

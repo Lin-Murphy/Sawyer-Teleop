@@ -8,6 +8,21 @@
 
 ## 当前决定
 
+### B 自动测量机器人时钟，免手动对时（2026-11-07）
+
+**仅更新 B（intera_backend / 新 robot_clock / feedback_log 哈希表），A 兼容；协议、门限、期限不变；无新依赖；需复制 deploy 并重启 B，A 重连。**
+用户反复遇到机器人重启后 `feedback_latest_expired`，要求启动 B / A 连接时自动检测修复、不再手动跑命令。根因：机器人时钟重启后
+与 B 差几十 ms，timesyncd 对 <0.4 s 偏差只缓慢 slew，B 用自身时钟校验源时间而持续拒收。改为 B 启动时及每 2 s 用无特权 SNTP
+向 ROS master 主机（sawyer.local，11-02 已确认提供 NTP）实测“机器人 − B”偏差，以实测机器人时钟校验 joint / pose / collision / cuff；
+测量误差（往返/2）只让数据更旧。往返 >50 ms、stratum 0、超 10 s 无新测量时退回 B 时钟（原行为）。50 ms 残差 / 100 / 500 ms 门限不变；
+这是显式测量，不是从反馈数据学习偏差。启动打印测量结果或 WARNING，日志 `feedback_diagnostics.robot_clock` 记录。
+新增 `tests/test_robot_clock.py`（回环 UDP 真实 SNTP 往返、杂包 / KoD、过期回退、85 ms 现场偏差下接受新鲜 / 拒绝过旧与超前、cuff）。
+完整 988 项 965 通过 / 23 跳过 / 0 失败；B 文件按 Python 3.8 语法解析通过。deploy 仅装入本改动 4 个文件并按磁盘重算清单
+（导出包中他人未提交的摄像头 / Web / pyproject 与 CRLF 版 Reset YAML 未装入），`release_accepted=false`。
+未连接机器人：机器人 NTP 实际应答、实测偏差与长期稳定性需现场启动 B 时看打印确认；若出现 WARNING 仍按 DEPLOYMENT 手动后备。
+证据：`../../windows-local/artifacts/robot-clock-auto-20261107/`。
+
+
 ### 批量录制新增“Reset arm between episodes”勾选项（2026-11-07）
 
 **仅更新 A（operator / web_session / Web 界面），B 无需更新；协议、复位目标、限速、期限不变。需重启 Start-A 生效，无需重校准。**
