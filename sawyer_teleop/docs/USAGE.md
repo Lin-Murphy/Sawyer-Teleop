@@ -82,8 +82,9 @@ Windows 双击 `Start-A.cmd`；Ubuntu 在 `sawyer_teleop/` 下 `bash scripts/ubu
 
 ### 输入平滑（Smooth teleop）
 
-A 在 IK 前对目标位姿做一次指数滤波，无死区。Light（默认）20 ms，约 60 ms 达到 95%；Heavy 40 ms，约 120 ms；
-DROID-like 150 ms（实验档），约 450 ms 达到 95%，更顺但明显更滞后。不勾选则不经过滤波。修改在**下次连接**生效。松手不经过滤波，仍优先取消。
+A 在 IK 前对目标位姿做一次指数滤波，无死区。Light 20 ms，约 60 ms 达到 95%；Heavy 40 ms，约 120 ms；
+DROID-like 150 ms（默认，2026-11-07 起），约 450 ms 达到 95%，更顺但明显更滞后。
+默认只作用于首次启动时从模板复制的本机配置；已有 `windows-local/config/operator.json` 保持其保存值。不勾选则不经过滤波。修改在**下次连接**生效。松手不经过滤波，仍优先取消。
 
 ### 运动选项（Motion option）
 

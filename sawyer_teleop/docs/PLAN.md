@@ -8,6 +8,17 @@
 
 ## 当前决定
 
+### Smooth teleop 默认改为 DROID-like 150 ms（2026-11-07）
+
+**仅更新 A（配置模板），B 无需更新；无代码 / 依赖变化，无需重校准。** 用户要求把界面上已选的 Smooth teleop 开启 +
+DROID-like 150 ms 设为默认。仅将 `config/operator.json` 的 `motion.time_constant_ms` 由 20.0 改为 150.0（`enabled` 原本即 true）；
+同文件中他人未提交的 `cameras` 改动原样保留。PoseSmoother 上限、Web 档位、校验和 `web_session` 缺省回退 40 ms 均不改。
+模板只在首次启动复制为本机配置；本机 `windows-local/config/operator.json` 已保存为 enabled / 150，未改动。
+USAGE、CURRENT_TELEOP_METHOD 同步，新增 `tests/test_smoothing_default.py`。相关 97 项（含 lab scene 7,177 输入、Web、启动器、部署）
+75 通过 / 22 Windows 跳过 Ubuntu 脚本 / 0 失败。150 ms 约 450 ms 达 95%，滞后明显，仍需实测手感；不代表实机验收。
+证据：`../../windows-local/artifacts/smoothing-default-150-20261107/`。下一步：重启 A 即用新默认（已有本机配置不受影响）。
+
+
 ### 实体 Sawyer Reset arm 改为新实测姿态（2026-11-07）
 
 **仅更新 B 配置（A 兼容，A 代码不变）。** 用户提供实测七轴（rad）：

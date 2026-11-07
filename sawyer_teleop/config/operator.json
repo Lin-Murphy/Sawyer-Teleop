@@ -8,7 +8,7 @@
   "position_scale": 1.0,
   "motion": {
     "enabled": true,
-    "time_constant_ms": 20.0
+    "time_constant_ms": 150.0
   },
   "trajectory": {
     "enabled": true,

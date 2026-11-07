@@ -77,7 +77,7 @@ Reset arm 是回到命名 neutral 的受限 cubic 关节运动，速度/加速�
 
 | 核对对象 | 本次看到的内容 |
 | --- | --- |
-| 主源码 `config/operator.json` | Gazebo 模板，120 Hz A，Light 20 ms，coordinated 轨迹，关节跳变保护开启 |
+| 主源码 `config/operator.json` | Gazebo 模板，120 Hz A，Smooth teleop 开启、DROID-like 150 ms（2026-11-07 起默认），coordinated 轨迹，关节跳变保护开启 |
 | Windows 本机 `windows-local/config/operator.json` | 保存为 intera / Standard / 20 ms / 120 Hz / 跟随误差 0.5；关节跳变保护关闭；这是保存值，不是当前进程状态 |
 | 本机保存的 `ik_mode=local` | 是保留的 Gazebo 偏好；GUI 连接 intera 时实际强制 remote，不能只看 JSON 下结论 |
 | 远端 `Lin/B-Lab-Ubuntu` | 10-29 已只读取回并核对的旧部署，反馈兼容修复已合入本地主源码；新持久日志与方案记录还未部署 |
