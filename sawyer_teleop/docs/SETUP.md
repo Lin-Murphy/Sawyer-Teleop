@@ -88,6 +88,32 @@ Quest APK 安装（需先装 adb，如 `sudo apt install adb`）：`bash scripts
 
 实验室电脑只运行实机 B，**不需要 Docker、仿真或 pip 安装**，复用现有 ROS Noetic / Python 3.8 / Intera 工作空间。
 
+### 在实验室电脑从 Git 仓库直接运行
+
+仓库直接提供 [实验室实机配置](../config/real-b.env)，包含现场主机名、IP 和夹爪串口及注释。
+同一台实验室电脑无需复制模板，在仓库根目录执行：
+
+```bash
+cd sawyer_teleop
+bash scripts/ubuntu/Start-B-Real.sh --check
+```
+
+配置使用 `sawyer.local` 和实验室 B 电脑地址 `10.101.119.182`；工作空间使用 `$HOME/sawyer_ws`。
+换电脑、网卡地址变化或更换夹爪适配器时，先按文件注释修改 IP、ROS / 工作空间路径和串口。
+没有外接夹爪时将 `SAWYER_GRIPPER_PORT` 设为空。该配置受 Git 跟踪，更新代码时需审查本地配置改动；
+其他电脑也可复制通用 `config/real-b.env.example` 到仓库外，用启动脚本的 `--config` 指定独立配置。
+
+检查通过后按实验室流程准备机器人，停止旧 B，再运行：
+
+```bash
+bash scripts/ubuntu/Start-B-Real.sh
+```
+
+A 选择 Real Sawyer，填写本机配置的 `SAWYER_BIND_IP`，重新连接 / 校准。
+启动会初始化已配置的夹爪，不自动执行机械臂 Reset。
+
+### 导出独立部署包
+
 1. 在开发电脑导出独立目录（只写新目录，不覆盖旧的）：
 
    ```bat
@@ -110,7 +136,9 @@ Quest APK 安装（需先装 adb，如 `sudo apt install adb`）：`bash scripts
 
 4. `bash Start-B.sh --check`：只检查本地配置和依赖，不访问机器人。
 
-`real-b.env` 含现场地址，已被 `.gitignore` 排除，只提交 `config/real-b.env.example`。
+源码中的 `config/real-b.env` 直接入库；其他位置的同名本机配置仍被忽略。
+导出时使用 `python3 scripts/export_deployment.py --output ../deploy-next --config config/real-b.env`
+携带这份实验室配置；不指定 `--config` 时保留原有导出选择规则。
 `runtime-wheels/` 里是 Linux x86_64 / Python 3.8 的 Ruckig 0.12.2 及其校验清单，必须随目录一起复制。
 
 ## 下一步

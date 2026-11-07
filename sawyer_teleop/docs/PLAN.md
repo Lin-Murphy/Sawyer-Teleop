@@ -141,6 +141,26 @@ USAGE、CURRENT_TELEOP_METHOD 同步，新增 `tests/test_smoothing_default.py`�
 Windows 驱动排查（同日，用户授权下载检查、未安装）：Microsoft Update Catalog 无 627B 条目；仅第三方 2006–2009 年 Sonix `snp2std` 包。下载 webcamtests.com `Sonix Chicony 5.7.2.004` `Windows.zip`（5,358,659 B，MD5 `0ba07a94…` 与页面所列 `382961be…` 不符，SHA256 `a85d4211…`）：INF 含 NTamd64 的 `USB\VID_0c45&PID_627b`（SN9C201 + OV7660），但引用的 `snp2std.cat` 不在包内，全部 .sys/.dll/.exe 均 NotSigned。64 位 Windows 11 强制驱动签名且本机内存完整性（HVCI）开启，该包无法正常加载；只能靠测试签名模式 / 关闭签名强制与 HVCI，属削弱系统安全，不采用。
 下一步（已被上面“WinUSB + 用户态驱动”条目取代）：腕部相机改用免驱 UVC 相机，或在 Ubuntu A 上使用原 SN9C20x 相机。
 
+### 直接共享实验室 B 运行配置（2026-11-07）
+
+**仅更新 B 配置与使用文档（A 兼容）。** 按用户最终要求，直接将源码中的
+`config/real-b.env` 纳入 Git，逐项添加中文说明；复用现场主机名、B IP 和夹爪适配器标识，
+工作空间使用 `$HOME/sawyer_ws`。撤掉单独的实验室模板，通用空白 example 保留。
+仅对此源文件解除忽略，其他本机配置继续忽略；AGENTS、SETUP 同步说明使用与导出方式。
+不改启动或运动逻辑、Reset 姿态或依赖，旧部署保留。配置文件更新不会改变已运行的实例。
+Bash 语法、配置参数一致性及 Git 空白检查通过；当前执行环境仍缺少可见 ROS 安装，
+未完成启动依赖检查，未连接机器人。下一步：在实验室终端 `--check` 后按现场流程启动。
+
+### 本机实机 B 现场配置迁移（2026-11-07）
+
+**仅更新 B 本机配置（A 兼容）。** 将旧部署目录
+`/home/k23114984/Lin/B-Lab-Ubuntu-20261102/config/real-b.env` 原样复制到当前代码根的
+`config/real-b.env`，保留旧副本。复用现场机器人地址、B 网卡地址、ROS / Intera 工作空间路径及
+外接夹爪串口；不改依赖、启动代码或新实测 Reset YAML。现场配置继续由 Git 忽略。
+Bash 语法检查通过；`Start-B-Real.sh --check` 在当前执行环境报
+`Missing ROS setup: /opt/ros/noetic/setup.bash`，尚未完成依赖检查或硬件验证，未启动 B 或访问机器人。
+下一步：在实际实验室 ROS 主机终端运行 `--check`；通过后由操作者停止旧 B 并启动新 B，A 重连 / 校准。
+
 ### 实体 Sawyer Reset arm 改为新实测姿态（2026-11-07）
 
 **仅更新 B 配置（A 兼容，A 代码不变）。** 用户提供实测七轴（rad）：

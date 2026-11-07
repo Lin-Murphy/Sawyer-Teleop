@@ -14,7 +14,8 @@
 - 代码根是 `sawyer_teleop/`（`pyproject.toml` 所在），产品代码在 `src/sawyer_teleop/`，测试在 `tests/`。
 - 根目录五个 `.cmd`（含 2026-10-30 按用户要求加回的 `Stop-B.cmd`）是 Windows 唯一对外入口，都经 `sawyer_teleop/scripts/windows/run-python.cmd` 调用
   `windows_dev.py` / `windows_launcher.py` / `windows_sim_launcher.py`。`.cmd` 文件保持 ASCII + CRLF。
-- 不入库：`windows-runtime/`、`windows-local/`、`ubuntu-local/`、`gazebo-image/*.tar.gz`（及下载中的 `*.part`）、`deploy*/`、`real-b.env`。
+- 不入库：`windows-runtime/`、`windows-local/`、`ubuntu-local/`、`gazebo-image/*.tar.gz`（及下载中的 `*.part`）、`deploy*/`。
+- `sawyer_teleop/config/real-b.env` 是入库的实验室实机配置；其他位置的 `real-b.env` 仍忽略。换电脑时核对 IP、工作空间和串口，勿写入密码或 Token。
 
 ## 测试
 

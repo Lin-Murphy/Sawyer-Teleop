@@ -14,8 +14,9 @@ __pycache__/
 .venv/
 .venv-b/
 
-# 本机机器人地址配置（只提交 .example）
+# 其他本机配置忽略；源码中的实验室实机配置直接入库
 real-b.env
+!/sawyer_teleop/config/real-b.env
 
 # 运行期输出
 sawyer_teleop/runtime/
