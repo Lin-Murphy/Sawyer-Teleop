@@ -8,6 +8,18 @@
 
 ## 当前决定
 
+### 批量录制新增“Reset arm between episodes”勾选项（2026-11-07）
+
+**仅更新 A（operator / web_session / Web 界面），B 无需更新；协议、复位目标、限速、期限不变。需重启 Start-A 生效，无需重校准。**
+用户要求批量录制时，在相邻两条之间回到 Reset arm 点位。新增默认不勾选的 `reset_between`（布尔，记入 batch / metadata / batch.json）。
+一条保存或丢弃处理完且整批未结束时，进入 `resetting` 阶段，复用原 `_start_reset`（同 neutral 目标、0.25 倍 cubic、到位判据，
+Gazebo 含场景恢复）；只有确认到位后才从此刻起计间隔，再开下一条。Stop reset、Save & End、超时、故障或断连都会停止并结束整批，
+不自动开始下一条；最后一条后不复位；B 无可用 Reset 姿态时开始前拒绝，不建目录。手动 Reset 在批次中仍被拒绝。
+新增 8 项测试（TCP 假后端两条批次到位、未勾选不动臂、停止 / 结束 / 间隔 / 参数 / 不可用）；完整 971 项 948 通过 / 23 跳过 / 0 失败（含 7,177 输入）。
+本地 Web 假后端截图确认勾选项显示。未在 Gazebo 或实机运行；实机复位会运动，首次使用需操作者在授权下确认路径与急停。
+同文件中他人未提交的摄像头改动原样保留。证据：`../../windows-local/artifacts/batch-reset-between-20261107/`。
+
+
 ### Smooth teleop 默认改为 DROID-like 150 ms（2026-11-07）
 
 **仅更新 A（配置模板），B 无需更新；无代码 / 依赖变化，无需重校准。** 用户要求把界面上已选的 Smooth teleop 开启 +

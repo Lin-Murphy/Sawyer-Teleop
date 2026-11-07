@@ -123,6 +123,12 @@ DROID-like 150 ms（默认，2026-11-07 起），约 450 ms 达到 95%，更顺�
 | 松开握键 | 停止跟随，录制继续 |
 
 保存成功才计数，同名不覆盖；倒计时不会自动握持或驱动机器人。结束录制也不会停止遥操。
+
+**Reset arm between episodes**（默认不勾选）：勾选后，每条保存或丢弃处理完、且整批未结束时，A 自动执行一次
+Reset arm（与按钮相同的复位目标、0.25 倍限速与到位判据；Gazebo 同时恢复场景），确认到位后才开始间隔倒计时，
+再开始下一条。复位会使机械臂运动，期间手柄握持无效；完成后需松开再握持才恢复遥操。点 **Stop reset**、
+Save & End，或复位超时 / 故障 / 断连，都会停在原地并结束整批，不会自动开始下一条。最后一条之后不复位。
+开始前若 B 不提供可用的 Reset 姿态，则拒绝开始录制。该选项记入 `batch.json` 与每条 metadata 的 `batch.reset_between`。
 manifest / HDF5 的 `complete` 只表示数据完整写盘，不表示任务成功。格式见 [DATASET](reference/DATASET.md)。
 
 录制默认保存到 `windows-local/data/`（Ubuntu：`ubuntu-local/data/`）。离线分析和导出（只读录制，不连接 B）：

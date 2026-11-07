@@ -333,3 +333,107 @@ def test_gazebo_neutral_outside_captured_model_is_unavailable_without_wrapping()
     compatible=dict(capability,q=[0.,-1.18,0.,2.18,0.,.57,0.])
     assert validate_neutral_model(compatible,urdf)==compatible
     assert not validate_neutral_model(capability,'')['available']
+
+
+# --- Optional Reset arm between batch episodes (2026-11-07) ---
+
+def test_batch_reset_between_returns_to_neutral_before_each_next_episode(live, tmp_path):
+    import json
+    backend, bridge, quest, op, _ = live
+    wait_until(lambda: op.view().get('quest', {}).get('valid', True))
+    op.request('calibrate')
+    wait_until(lambda: op.mapping is not None)
+    phases = []
+    op.request('start_recording', name='reset_batch', count=2, seconds=.3, pause=0, reset_between=True)
+    def done():
+        view = op.view()
+        phases.append(view.get('recording_phase'))
+        return view.get('recording_phase') == 'complete'
+    wait_until(done, 20)
+    assert 'resetting' in phases
+    assert phases.index('resetting') < len(phases)-1-phases[::-1].index('recording')  # Reset, then episode 2.
+    assert op.saved_count == 2 and op.attempt_count == 2 and op.batch_reset is None
+    assert backend.q == pytest.approx(backend.neutral_pose['q'], abs=.008726646)
+    index = json.loads((tmp_path/'reset_batch'/'batch.json').read_text(encoding='utf-8'))
+    assert index['reset_between'] is True and index['saved'] == 2
+    assert not bridge.core.armed  # Each reset ends in a hold; teleop needs release + squeeze.
+
+
+def test_batch_without_reset_between_never_moves_the_arm(live, tmp_path):
+    backend, bridge, quest, op, _ = live
+    op.request('calibrate')
+    wait_until(lambda: op.mapping is not None)
+    op.request('start_recording', name='plain_batch', count=2, seconds=.2, pause=0)
+    wait_until(lambda: op.view().get('recording_phase') == 'complete', 20)
+    assert op.saved_count == 2 and backend.q == [0.]*7 and bridge.core.submitted == 0
+
+
+def _pending_batch(op, tmp_path):
+    op.batch = dict(name='b', count=3, seconds=60., pause=0., reset_between=True, task='', root=str(tmp_path))
+    op.auto_recording, op.batch_reset, op.next_record_at = True, 'pending', float('inf')
+
+
+def test_stop_reset_between_episodes_stops_the_batch_without_recording(manual, tmp_path):
+    op = manual
+    _pending_batch(op, tmp_path)
+    op.tick()
+    assert op.batch_reset == 'active' and op.resetting
+    assert op.robot.arms[-1]['motion_purpose'] == 'neutral_reset'
+    assert op.view()['recording_phase'] == 'resetting'
+    op.request('stop_reset')
+    op.tick()
+    op.tick()
+    assert not op.auto_recording and op.batch_reset is None and op.episode is None
+    assert 'did not complete' in op.view()['recording_error']
+    count = len(op.robot.targets)
+    op.tick()
+    assert len(op.robot.targets) == count and not list(tmp_path.iterdir())
+
+
+def test_save_and_end_during_reset_between_cancels_motion(manual, tmp_path):
+    op = manual
+    _pending_batch(op, tmp_path)
+    op.tick()
+    holds = len(op.robot.holds)
+    op.request('stop_batch')
+    op.tick()
+    assert op.resetting is None and op.batch_reset is None and not op.auto_recording
+    assert len(op.robot.holds) == holds+1 and not op.robot.state['armed']
+
+
+def test_completed_reset_between_starts_interval_then_records(manual, tmp_path):
+    op = manual
+    _pending_batch(op, tmp_path)
+    op.tick()
+    op.robot.state['sample'].update(q=neutral_target(op.robot.hello['neutral_pose']), dq=[0.]*7)
+    op.tick()
+    op.resetting['settled_ns'] = ns()-110_000_000
+    op.robot.state['sample']['seq'] += 1
+    op.tick()
+    assert op.resetting is None and op.reset_completed and op.batch_reset == 'active'
+    op.batch['pause'] = 30.
+    op.tick()
+    assert op.batch_reset is None and op.auto_recording and op.episode is None
+    assert op.view()['recording_phase'] == 'countdown' and 25 < op.view()['ready_in_s'] <= 30
+
+
+@pytest.mark.parametrize('value', ['yes', 1, None])
+def test_reset_between_option_must_be_boolean(manual, tmp_path, value):
+    import numpy as np
+    op = manual
+    op.mapping = np.eye(3)
+    op.calibration_epoch = op.epoch = op.quest.poll()['epoch']
+    with pytest.raises(ValueError, match='Reset between'):
+        op._start_recording({'reset_between': value}, op.quest.poll())
+    assert not list(tmp_path.iterdir())
+
+
+def test_unavailable_reset_pose_refuses_batch_before_creating_files(manual, tmp_path):
+    import numpy as np
+    op = manual
+    op.robot.hello['neutral_pose'] = {'available': False, 'reason': 'B has no neutral pose'}
+    op.mapping = np.eye(3)
+    op.calibration_epoch = op.epoch = op.quest.poll()['epoch']
+    with pytest.raises(ValueError, match='no neutral pose'):
+        op._start_recording({'reset_between': True}, op.quest.poll())
+    assert not list(tmp_path.iterdir()) and not op.robot.arms

@@ -84,6 +84,10 @@ class Operator:
         self.saved_seconds = 0.
         self.finish_save = False
         self.auto_recording = False
+        # Optional batch-only return to the Reset arm pose between episodes:
+        # None, "pending" (start after the previous file is processed) or "active".
+        self.batch_reset = None
+        self.reset_completed = False
         self.following = False
         self.arming = False
         self.resetting = None
@@ -295,7 +299,8 @@ class Operator:
         elapsed = time.monotonic()-self.record_started if self.episode else self.record_elapsed
         self._status(recording=self.episode is not None,
                      recording_phase=("recording" if self.episode else "review" if self.review else
-                                      "finishing" if self.finishing else "countdown" if self.auto_recording else
+                                      "finishing" if self.finishing else "resetting" if self.batch_reset else
+                                      "countdown" if self.auto_recording else
                                       "complete" if self.batch and self.saved_count >= self.batch["count"] else "idle"),
                      elapsed_s=elapsed, saved_count=self.saved_count,
                      discarded_count=self.discarded_count, attempt_count=self.attempt_count,
@@ -326,7 +331,12 @@ class Operator:
         pause = float(options.get("pause", 5))
         if not (1 <= count <= 10000 and 0 < seconds <= 120 and 0 <= pause <= 300):
             raise ValueError("Count: 1–10000; duration: greater than 0 and up to 120 s; interval: 0–300 s")
-        batch = dict(name=name, count=count, seconds=seconds, pause=pause,
+        reset_between = options.get("reset_between", False)
+        if type(reset_between) is not bool:
+            raise ValueError("Reset between episodes must be true or false")
+        if reset_between:
+            self._reset_target()  # Refuse before recording if Reset arm is unavailable.
+        batch = dict(name=name, count=count, seconds=seconds, pause=pause, reset_between=reset_between,
                      task=str(options.get("task", "")),
                      root=str(Path(options.get("root", self.output)).expanduser().resolve()))
         for camera in self.cameras:
@@ -393,6 +403,10 @@ class Operator:
     def _stop_batch(self):
         self.auto_recording = False
         self.next_record_at = 0.
+        if self.batch_reset is not None:
+            self.batch_reset = None
+            if self.resetting is not None:
+                self._pause("Batch stopped; arm reset cancelled. Release grip, then squeeze to resume teleop.")
         self._status(message="Batch recording stopped; teleop remains independent")
 
     def _end_recording(self):
@@ -432,6 +446,10 @@ class Operator:
             if finished.error or not finished.result or self.saved_count >= self.batch["count"]:
                 self.auto_recording = False
                 self.next_record_at = 0.
+            elif self.auto_recording and self.batch.get("reset_between"):
+                # The interval starts only after the arm is confirmed at the Reset pose.
+                self.batch_reset = "pending"
+                self.next_record_at = float("inf")
             if finished.result == "discarded":
                 self._status(message="Episode discarded"+("; batch stopped due to a recording error" if finished.error else ""),
                              last_result="discarded", recording_error="")
@@ -555,16 +573,21 @@ class Operator:
         return {"p": target[:3, 3].tolist(),
                 "q": Rotation.from_matrix(target[:3, :3]).as_quat().tolist()}
 
-    def _start_reset(self):
-        if self.episode or self.review or self.finishing or self.auto_recording:
-            raise ValueError("Finish saving or discarding and end the recording batch before Reset arm.")
+    def _reset_target(self):
         q = neutral_target(self.robot.hello.get("neutral_pose"))
         if self.robot.hello.get("backend") == "gazebo":
             scene = self.robot.hello.get("scene_reset") or {}
             if not scene.get("available"):
                 raise ValueError(scene.get("reason") or "Scene reset requires an updated Gazebo B. Update B and reconnect.")
+        return q
+
+    def _start_reset(self, between_episodes=False):
+        if self.episode or self.review or self.finishing or (self.auto_recording and not between_episodes):
+            raise ValueError("Finish saving or discarding and end the recording batch before Reset arm.")
+        q = self._reset_target()
         if self.resetting is not None:
             return
+        self.reset_completed = False
         self._pause("Preparing arm reset")
         self.resetting = {"q": q, "started_ns": ns(), "next_send_ns": 0,
                           "settled_ns": None}
@@ -596,6 +619,7 @@ class Operator:
                 if result.get("state") == "completed":
                     self._pause("Arm is at neutral; scene restored. Release grip, then squeeze to resume teleop.",
                                 bridge_state=state)
+                    self.reset_completed = True
                     return
             return
         if state["generation"] != self.robot.generation or not state.get("armed", False):
@@ -624,6 +648,8 @@ class Operator:
                 self.resetting = {"phase": "scene", "started_ns": ns(), "scene_id": None}
                 self._status(mode="resetting", resetting=True, message="Arm is at neutral; restoring scene objects.")
                 self.resetting["scene_id"] = self.robot.reset_scene()["id"]
+            else:
+                self.reset_completed = True
             return
         if now >= reset["next_send_ns"]:
             self.robot.target(reset["q"], sample["seq"])
@@ -703,8 +729,18 @@ class Operator:
                 self._start_recording(parameters.get("start_recording", {}), value)
             if self.episode and time.monotonic()-self.record_started >= self.batch["seconds"]:
                 self._finish(True)
+            if self.batch_reset == "active" and self.resetting is None:
+                # Any stop, timeout, fault or disconnect leaves the batch stopped, never resumed.
+                self.batch_reset = None
+                if not self.reset_completed:
+                    self.auto_recording = False
+                    self.next_record_at = 0.
+                    raise RuntimeError("Arm reset between episodes did not complete")
+                self.next_record_at = time.monotonic()+self.batch["pause"]
+                self._status(message="Arm is at the Reset pose; next episode after the interval. "
+                                     "Release grip, then squeeze to resume teleop.")
             if (self.auto_recording and not self.episode and not self.review and not self.finishing
-                    and time.monotonic() >= self.next_record_at):
+                    and self.batch_reset is None and time.monotonic() >= self.next_record_at):
                 self._start_recording(self.batch, value)
         except Exception as exc:
             self.auto_recording = False
@@ -743,6 +779,20 @@ class Operator:
                         self._record_error(message)
                     raise RuntimeError(self.episode.error)
             self._receipts()
+            if self.batch_reset == "pending" and self.resetting is None:
+                try:
+                    self._start_reset(between_episodes=True)
+                except Exception as exc:
+                    self.batch_reset = None
+                    self.auto_recording = False
+                    self.next_record_at = 0.
+                    if self.resetting is not None:
+                        self._pause(str(exc), "error")
+                    self._record_error("Arm reset between episodes failed; batch stopped: "+str(exc))
+                    return
+                self.batch_reset = "active"
+                self._status(message="Returning to the Reset pose between episodes. Click Stop reset to cancel the batch.")
+                state = self.robot.snapshot()
             if "reset_arm" in actions:
                 try:
                     self._start_reset()

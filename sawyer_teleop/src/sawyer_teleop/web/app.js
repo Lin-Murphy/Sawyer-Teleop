@@ -22,7 +22,7 @@ async function command(action,options={}){
   finally{busy--;render();}
 }
 function settings(){return {backend:$('backend').value,host:$('host').value.trim(),serial:$('serial').value.trim(),smoothing:$('smoothing').checked,smoothing_ms:Number($('smoothingMs').value),profile:$('profile').value,joint_protection:$('protection').checked,cameras:$('cameras').checked};}
-function recordOptions(){return {name:$('batchName').value,task:$('task').value,root:$('output').value,count:Number($('count').value),seconds:Number($('seconds').value),pause:Number($('pause').value)};}
+function recordOptions(){return {name:$('batchName').value,task:$('task').value,root:$('output').value,count:Number($('count').value),seconds:Number($('seconds').value),pause:Number($('pause').value),reset_between:$('resetBetween').checked};}
 function fillDefaults(d){$('backend').value=d.backend;$('host').value=d.host;$('serial').value=d.serial;$('smoothing').checked=d.smoothing;if(![...$('smoothingMs').options].some(o=>Number(o.value)===d.smoothing_ms))$('smoothingMs').add(new Option('Custom · '+d.smoothing_ms+' ms',d.smoothing_ms));$('smoothingMs').value=String(d.smoothing_ms);$('profile').value=d.profile;$('protection').checked=d.joint_protection;$('cameras').checked=d.cameras;$('output').value=d.output;}
 function optionsList(id,values){const signature=JSON.stringify(values);if($(id).dataset.signature===signature)return;$(id).dataset.signature=signature;$(id).replaceChildren(...values.map(value=>new Option(value,value)));}
 function fmt(value,digits=1){return typeof value==='number'&&Number.isFinite(value)?value.toFixed(digits):'—';}
@@ -68,10 +68,10 @@ function render(){
   const batch=s.batch||{},batchKey=JSON.stringify(batch);
   if(batch.name&&batchKey!==lastBatch){$('batchName').value=batch.name;lastBatch=batchKey;}
   document.querySelectorAll('[data-record]').forEach(e=>e.disabled=!own||!recordIdle||requestBusy);
-  const names={idle:'Not recording',recording:'● Recording',review:'Ended · save or discard',finishing:'Processing data…',countdown:'Preparing next episode',complete:'Batch complete'};
+  const names={idle:'Not recording',recording:'● Recording',review:'Ended · save or discard',finishing:'Processing data…',countdown:'Preparing next episode',resetting:'Returning arm to Reset pose',complete:'Batch complete'};
   text('recordPhase',names[phase]||phase);$('recordPhase').parentElement.dataset.phase=phase;
   const seconds=batch.seconds||Number($('seconds').value),delay=s.ready_in_s||0,countdown=s.auto_recording&&['countdown','finishing'].includes(phase);
-  text('recordTime',countdown?'Next in '+fmt(delay)+' s':fmt(s.elapsed_s||0)+' / '+fmt(seconds)+' s');
+  text('recordTime',phase==='resetting'?'Resetting arm…':countdown?'Next in '+fmt(delay)+' s':fmt(s.elapsed_s||0)+' / '+fmt(seconds)+' s');
   $('progress').max=countdown?(batch.pause||1):seconds;$('progress').value=countdown?Math.max(0,(batch.pause||0)-delay):Math.min(s.elapsed_s||0,seconds);
   text('counts',`Saved ${s.saved_count||0} / ${batch.count||$('count').value} · Discarded ${s.discarded_count||0} · Total ${fmt(s.saved_seconds||0)} s`);
   $('recordToggle').textContent=phase==='recording'||s.auto_recording?'Save & End':'Start Recording';
@@ -79,7 +79,7 @@ function render(){
   $('recordToggle').disabled=!own||!connected||requestBusy||!(phase==='recording'||s.auto_recording||canStart);
   $('save').disabled=$('discard').disabled=!own||!connected||requestBusy||!['recording','review'].includes(phase);
   text('recordError',s.recording_error||'');$('recordError').hidden=!s.recording_error;
-  text('recordDetail',countdown?'Recording resumes after the current file is processed.':String(s.last_result||last.last_recording?.path||''));
+  text('recordDetail',phase==='resetting'?'Next episode interval starts once the arm is at the Reset pose. Stop reset ends the batch.':countdown?'Recording resumes after the current file is processed.':String(s.last_result||last.last_recording?.path||''));
   if(last.last_recording&&!connected)text('recordDetail',(last.last_recording.note||'')+' '+last.last_recording.path+(last.last_recording.error?' · '+last.last_recording.error:''));
   const rows=[['Feedback check',feedback.detail],['B source fault',timing.source_fault||'—'],['B source at frame creation',timing.source_valid===true?fmt(timing.b_source_age_ms)+' ms · valid':'Unavailable · '+String(timing.source_valid??'unknown')],['B frame → A receive (upper bound)',timing.connected?fmt(timing.delivery_upper_ms)+' ms':'Unavailable'],['A residence',fmt(timing.a_residence_ms)+' ms'],['Source reference remaining',timing.budget_valid?fmt(timing.reference_remaining_ms)+' ms · '+timing.reference_kind:'Unavailable'],['IK elapsed / solve / dispatch',`${fmt(timing.ik_elapsed_ms)} / ${fmt(timing.ik_solve_ms)} / ${fmt(timing.ik_dispatch_wait_ms)} ms`],['Clock uncertainty','±'+fmt(timing.clock_uncertainty_ms)+' ms'],['Limits · A / B latest / B reference',`${fmt(timing.a_limit_ms)} / ${fmt(timing.b_latest_limit_ms)} / ${fmt(timing.b_reference_limit_ms)} ms`],['Input packets / targets sent / submitted',`${s.input_rate?.total||0} / ${s.target_rate?.total||0} / ${s.target_rate?.submitted||0}`]];
   $('diagnostics').replaceChildren(...rows.flatMap(([key,value])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;return [dt,dd];}));

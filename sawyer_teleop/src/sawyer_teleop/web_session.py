@@ -435,7 +435,7 @@ class WebSession:
                 raise SessionError('Connect B and Quest first.')
             parameters = {}
             if action == 'start_recording':
-                allowed = {'name', 'task', 'root', 'count', 'seconds', 'pause'}
+                allowed = {'name', 'task', 'root', 'count', 'seconds', 'pause', 'reset_between'}
                 if set(options)-allowed:
                     raise SessionError('Unknown recording option.')
                 parameters = dict(options)
