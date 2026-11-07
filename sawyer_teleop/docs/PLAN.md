@@ -8,6 +8,23 @@
 
 ## 当前决定
 
+### 实体 Sawyer Reset arm 改为新实测姿态（2026-11-07）
+
+**仅更新 B 配置（A 兼容，A 代码不变）。** 用户提供实测七轴（rad）：
+`0.932630859375, -0.975340820313, -1.853528320312, 1.354167968750, 0.580955078125, 1.943027343750, 4.017021484375`，
+取代 10-26 姿态。仅改 `config/lab-neutral-pose.yaml`（保留原文精度，不取模 / 归一化；均在实机 URDF 限位内，
+J6 在 ±4.7124 内）。机制不变：`Start-B-Real.sh` 加载为 `/named_poses/right/poses/neutral`，B 启动读取，经 `hello.neutral_pose`
+给 A；A 无持久化或硬编码实机值。有意不改：FakeBackend 合成值、Gazebo J6 兼容列表及镜像 named pose
+（新 J6 超 Gazebo ±3.14，Gazebo 不加载该 YAML）、测试任意角度、`deploy-20261026` 历史副本、env / 夹爪 / 网络。
+新增 `tests/test_lab_neutral_pose.py` 校验文本精度、顺序、有限值和实机限位；DEPLOYMENT 增补生效步骤。
+按导出流程生成新包后只替换 `deploy/B-Lab-Ubuntu` 的 YAML、DEPLOYMENT.md 与清单（YAML 366 B，
+SHA-256 `b5e22278…a97e8e`），保留现场 `real-b.env`，`release_accepted=false`、`hardware_validation=pending`。
+相关 102 项（80 通过 / 22 Windows 跳过 Ubuntu 脚本）与完整 960 项（937 通过 / 23 跳过 / 0 失败）通过；
+首轮沙箱拒绝默认 pytest 临时目录的失败日志保留。未连接 ROS 或机器人。
+证据：`../../windows-local/artifacts/lab-neutral-pose-20261107/verification.json`。
+下一步：实验室替换 B 的 YAML（或整个 deploy，保留 env）→ `--check` → 重启 B → A 重连 / 校准，
+`rosparam get` 确认后由操作者在授权下首次 Reset，验证到位与路径安全。
+
 ### 增补现场快速恢复命令（2026-11-02）
 
 按用户要求，在 DEPLOYMENT 顶部新增“再次出现反馈时间错误：现场快速恢复命令”，集中列出 A 断开 / 操作者停止 B、重启 timesyncd、等待后检查同步、从实际最新版目录启动 B、失败时收集 NTP 和最新反馈日志。明确已有 NTP 配置不必每次重写、示例目录不能替代实际新版路径、启动会初始化夹爪，且恢复需由实际反馈验证。仅文档更新，无代码 / 配置 / deploy 变动，不操作运行实例；检查 Markdown 围栏与空白差异，无需运行代码测试。下一次按该入口执行，未恢复则转完整手册诊断。

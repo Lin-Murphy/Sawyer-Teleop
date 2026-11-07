@@ -235,6 +235,20 @@ PollIntervalMinSec=16s，PollIntervalMaxSec=32s。NTP不是deploy的一部分。
 【粘贴页面报错、B启动输出、timesync-status和最新反馈日志】
 ```
 
+## 实验室 Reset arm 姿态（2026-11-07）
+
+实体 Sawyer 的 Reset arm 目标改为现场实测姿态（rad，`right_j0`–`right_j6`）：
+`0.932630859375, -0.975340820313, -1.853528320312, 1.354167968750, 0.580955078125, 1.943027343750, 4.017021484375`。
+来源唯一为 `config/lab-neutral-pose.yaml`：`Start-B-Real.sh` 在只读图检查后 `rosparam load` 为
+`/named_poses/right/poses/neutral`，B 启动时读取一次，经握手 `hello.neutral_pose` 发给 A；A 不保存旧值。
+J6=4.017 rad 只适用于实机 ±4.7124 模型，不用于 Gazebo（Gazebo 仍用镜像内 named pose）。
+
+生效步骤：A 断开 → 停止旧 B → 用新 deploy 替换实验室 B 的 `config/lab-neutral-pose.yaml`
+（或整个目录，保留现场 `config/real-b.env`）→ `--check` → 重启 B → A 重新连接 / 校准。
+只改 A 端文件或只改 YAML 而不重启 B 都不会生效。启动后可只读确认：
+`rosparam get /named_poses/right/poses/neutral`，以及 A 界面 Reset 可用。
+首次实际 Reset 会让机械臂运动到新姿态，需操作者确认路径无障碍、急停可用；本轮未做实机验证。
+
 ## 固定实验室配置（2026-11-02）
 
 用户从实验室现有配置确认：机器人 `sawyer.local`；B 的 ROS_IP / BIND_IP
