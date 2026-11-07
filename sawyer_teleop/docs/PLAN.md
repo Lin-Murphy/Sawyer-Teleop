@@ -1,12 +1,26 @@
 # 项目状态
 
-更新：2026-11-02。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
+更新：2026-11-07。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
 
 > 2026-10-29 发布整理：Windows 入口合并为仓库根目录的 `Setup.cmd` / `Start-A.cmd` / `Start-B.cmd` / `Test.cmd`；
 > 文档合并为 SETUP / USAGE / TROUBLESHOOTING / DEVELOPMENT。下文历史条目里的旧脚本名（Install-Dev、Test-A、Stop-B、Install-Quest 等）、
 > 旧文档名和 `rog-local/`、`windows-local/artifacts/` 证据链接均指整理前的原作者本机环境，未随仓库发布。
 
 ## 当前决定
+
+### D435 先使用 RGB 单流，替换 Qt 预览（2026-11-07）
+
+**仅更新 A 电脑侧独立相机工具；A/B 遥操代码无需更新，无 arcap / 系统依赖安装、服务重启或机器人重校准要求。** 用户反馈 `QObject::moveToThread`、Qt 字体目录错误及 5 秒取帧超时；现场分流验证彩色流正常、深度流在 424×240 / 15 FPS、848×480 / 30 FPS 和 640×480 / 30 FPS 均无帧，原生 V4L2 彩色能取帧、深度 6 秒仍超时。双流预览已改为非阻塞 Tkinter/Pillow，实际 GUI 依赖及已知数组换算检查通过，深度原因仍未查实。
+
+曾仅重置空闲 D435 的连接状态；首次重连检查遇到设备已断开、一次检查命令括号错误，修正后仍复现深度超时。SDK 2.55.1 RSUSB 后端在 `ubuntu-local/realsense-rsusb/` 本地编译完成，但双流启动报 No device connected，随后只读枚举又可看到设备；未判定为修复、未启用该构建、未安装 udev 规则或改写环境。用户随后明确要求“先不管深度图片，先用 RGB”，因此停止深度与替代后端排查。
+
+新增 `realsense_camera/rgb_preview.py`，只配置 RGB8 640×480 / 30 FPS，采用 Tkinter/Pillow 显示，不导入 OpenCV、不启用或等待深度、不写图像。顶层 `../../Preview-RealSense-Camera.sh` 固定调用 arcap 与新 RGB 入口，README 同步。真实 RGB 连续读取 120 帧通过，约 30.0 FPS；完整 GUI 120 帧预览通过，未出现原 Qt 错误。Python 3.8 语法和 shell 语法检查通过。下一步先使用 RGB 预览；深度问题保留，等待用户后续要求。
+
+### D435 独立 RGB / Depth 实时读取脚本（2026-11-07）
+
+**仅新增 A 电脑侧独立相机工具，A/B 遥操运行代码均无需更新，无配置、依赖安装、重启服务或重校准要求。** 新增 `realsense_camera/rgb_depth_preview.py` 与使用说明，复用本机 `arcap` 已有的 OpenCV、NumPy、pyrealsense2。配置 RGB8 / Z16 两路 640×480、30 FPS，以 SDK align 将深度对齐到彩色图，提供独立 RGB、原始深度及按实际 scale 换算的米制数组；并排预览、中心深度显示、Q / Esc / 关闭窗口退出，支持 `--headless --frames N` 有界检查，不保存图像，不连接机器人。
+
+Python 3.8 语法、依赖导入、CLI 帮助和 diff 空白检查通过。沙箱内枚举失败于 `could not initialize udev monitor`；获准在沙箱外读取后识别到 D435（固件 5.17.3.10、USB 3.2），确认设备支持所选流、depth scale 约 0.001 m/unit。但 60 对图像检查在首帧 5 秒超时；独立 SDK 读取延长至 15 秒仍无帧，V4L2 报无帧，当前同步模式为默认 0。未将语法或设备枚举成功记作采集成功，未验证 GUI；未改驱动、SDK、相机选项或执行硬件重置。下一步在本机终端使用该脚本复核，再按需排查设备占用 / USB / V4L2 取帧问题。
 
 ### 记录现场 A / B 启动入口（2026-11-02）
 
