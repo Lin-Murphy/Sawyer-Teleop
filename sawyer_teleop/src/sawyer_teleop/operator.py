@@ -20,7 +20,7 @@ from .input_status import describe_input
 from .motion import PoseSmoother, input_stamp
 from .trajectory import trajectory_options
 from .motion_profiles import DIRECT_POSE_MODE, CARTESIAN_RATES, MOTION_PROFILES, selected_motion_profile, motion_profile_reason
-from .gripper import trigger_command
+from .gripper import gripper_is_open, trigger_command
 from .pause import bridge_pause_message
 from .neutral import neutral_target, NEUTRAL_TOLERANCE_RAD, NEUTRAL_TIMEOUT_S
 from .feedback_diagnostics import reference_from_snapshot, reference_remaining_ms
@@ -680,10 +680,12 @@ class Operator:
             return
         self.reset_completed = False
         self._pause("Preparing arm reset")
+        gripper = -1 if self.robot.hello.get("gripper_control") else None
         self.resetting = {"q": q, "started_ns": ns(), "next_send_ns": 0,
-                          "settled_ns": None}
+                          "settled_ns": None, "gripper": gripper}
+        action = "Returning to neutral and opening gripper" if gripper is not None else "Returning to neutral"
         self._status(mode="resetting", following=False, resetting=True,
-                     message="Returning to neutral. Click Stop to cancel; controller grip is inactive.")
+                     message=action+". Click Stop to cancel; controller grip is inactive.")
         # A fixed destination uses one shared-duration curve for all joints.
         # Keep the configured limits even when teleop interpolation is disabled.
         self.robot.arm(trajectory=dict(self.reset_trajectory_options, enabled=True, profile="cubic"),
@@ -718,11 +720,15 @@ class Operator:
             return
         now = ns()
         reset = self.resetting
-        if now-reset["started_ns"] > NEUTRAL_TIMEOUT_S*1e9:
-            self._pause("Arm reset timed out before reaching neutral.", "error")
-            return
         sample = state["sample"]
-        reached = (max(abs(a-b) for a,b in zip(sample["q"], reset["q"])) < NEUTRAL_TOLERANCE_RAD
+        gripper_open = reset["gripper"] is None or gripper_is_open(sample.get("gripper") or {})
+        if now-reset["started_ns"] > NEUTRAL_TIMEOUT_S*1e9:
+            message = ("Arm reset timed out before reaching neutral." if gripper_open else
+                       "Arm reset timed out while waiting for the gripper to open.")
+            self._pause(message, "error")
+            return
+        reached = (gripper_open and
+                   max(abs(a-b) for a,b in zip(sample["q"], reset["q"])) < NEUTRAL_TOLERANCE_RAD
                    and max(abs(v) for v in sample["dq"]) < .02)
         if not reached:
             reset["settled_ns"] = None
@@ -743,7 +749,7 @@ class Operator:
                 self.reset_completed = True
             return
         if now >= reset["next_send_ns"]:
-            self.robot.target(reset["q"], sample["seq"])
+            self.robot.target(reset["q"], sample["seq"], gripper=reset["gripper"])
             reset["next_send_ns"] = now + 20_000_000
 
     def _solve_timed(self, target, seed, feedback_seq):

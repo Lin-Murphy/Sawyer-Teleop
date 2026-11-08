@@ -3,6 +3,8 @@ import math
 
 from .protocol import ns
 
+SIM_OPEN_M = .04
+
 
 def trigger_command(trigger):
     if isinstance(trigger, bool) or not isinstance(trigger, (int, float)):
@@ -10,6 +12,18 @@ def trigger_command(trigger):
     if not math.isfinite(trigger) or not 0 <= trigger <= 1:
         raise ValueError("invalid_trigger")
     return -1 if trigger < .3 else 1
+
+
+def gripper_is_open(state):
+    """Confirm an open command reached its destination before dropping its lease."""
+    if not state.get("valid") or state.get("target") != -1:
+        return False
+    if "state" in state:  # Dynamixel reports reached after stable encoder samples.
+        return state["state"] == "reached"
+    if "position_m" in state:
+        fingers = state["position_m"]
+        return fingers is not None and len(fingers) == 2 and all(abs(p-SIM_OPEN_M) <= .002 for p in fingers)
+    return True  # The software backend applies the target immediately.
 
 
 class SimulationGripper:
@@ -52,7 +66,7 @@ class SimulationGripper:
         if not state["valid"]:
             raise RuntimeError(state["fault"])
         if not self.active or self.target != value:
-            self._publish([.04 if value == -1 else 0.] * 2)
+            self._publish([SIM_OPEN_M if value == -1 else 0.] * 2)
             self.submitted += 1
             self.target, self.active = value, True
 
@@ -60,7 +74,7 @@ class SimulationGripper:
         # Never open automatically on grip release; stop at fresh measured positions.
         active, self.active = self.active, False
         if active and self.snapshot()["valid"]:
-            self._publish([min(.04, max(0., p)) for p in self.positions])
+            self._publish([min(SIM_OPEN_M, max(0., p)) for p in self.positions])
 
     def close(self):
         for publisher in self.publishers:

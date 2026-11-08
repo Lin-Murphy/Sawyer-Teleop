@@ -48,7 +48,8 @@ bash Start-B.sh
 脚本依次：source ROS 与工作空间 → 拒绝仿真时钟 → 只读检查 ROS master 和官方 IK 服务 →
 把 `config/lab-neutral-pose.yaml` 载入 `/named_poses/right/poses/neutral`（Reset 目标）→ 启动 B。
 **不会**自动使能、回中、清急停、启动 roscore。使能按实验室流程，保持唯一运动控制者。
-固定参数：控制 100 Hz，工具 `right_hand`，最新反馈 / 源引用 / 命令期限 100 / 250 / 250 ms；实机夹爪尚未接入。
+固定参数：控制 100 Hz，工具 `right_hand`，最新反馈 / 源引用 / 命令期限 100 / 250 / 250 ms。
+配置了 Dynamixel 串口的 B 支持夹爪控制，见 [部署补充](DEPLOYMENT.md#配置与启动)。
 
 ## 启动 A
 
@@ -161,7 +162,8 @@ Windows 下把 `python` 换成 `windows-runtime\python\python.exe`。训练适�
 
 ### Reset arm
 
-先停止录制并松手。Reset arm 用原轨迹回到 neutral，进行中按钮变成 Stop 可取消。
+先停止录制并松手。Reset arm 用原轨迹回到 neutral。B 支持夹爪控制时，回中开始即发出张开指令，
+机械臂到位且夹爪确认张开后才完成。手动复位和批间自动复位行为相同，进行中点 Stop 可同时取消回中和张开。
 Gazebo 回中并保持后，还会异步还原场景中非机器人模型的位置并清零速度（不重置 `/clock`）。
 Gazebo 的初始姿态与 Reset 相同：官方 J6=3.3161 rad 在 Gazebo 中表示为 −2.967 rad（整圈等价），仅仿真使用。
 

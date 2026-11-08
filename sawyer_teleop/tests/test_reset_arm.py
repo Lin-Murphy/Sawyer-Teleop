@@ -95,7 +95,7 @@ def test_reset_without_tracking_or_calibration_uses_coordinated_limits(manual, t
     assert options['enabled'] and options['profile'] == 'cubic'
     assert options['max_velocity_rad_s'] == [v*.25 for v in op.trajectory_options['max_velocity_rad_s']]
     assert options['max_acceleration_rad_s2'] == [a*.25 for a in op.trajectory_options['max_acceleration_rad_s2']]
-    assert op.robot.targets[0][0] == FakeBackend.neutral_pose['q']
+    assert op.robot.targets[0] == (FakeBackend.neutral_pose['q'], 1, {'gripper': None})
     assert op.future is None and not list(tmp_path.iterdir())
 
 
@@ -112,6 +112,7 @@ def test_stop_preempts_full_queue_and_pending_start(manual):
 
 def test_stop_arriving_during_arm_reply_prevents_first_target(manual):
     op = manual
+    op.robot.hello['gripper_control'] = True
     original = op.robot.arm
     def arm(**options):
         original(**options)
@@ -121,6 +122,35 @@ def test_stop_arriving_during_arm_reply_prevents_first_target(manual):
     op.tick()
     assert not op.robot.targets and not op.resetting and not op.robot.state['armed']
     assert len(op.robot.holds) == 1
+
+
+@pytest.mark.parametrize('moving, opened', [
+    ({'state': 'opening'}, {'state': 'reached'}),
+    ({'position_m': [.04, .03]}, {'position_m': [.04, .039]}),
+])
+def test_already_neutral_reset_keeps_open_command_until_gripper_reaches_target(manual, moving, opened):
+    op = manual
+    op.robot.hello['gripper_control'] = True
+    sample = op.robot.state['sample']
+    sample.update(q=FakeBackend.neutral_pose['q'], gripper=dict(moving, valid=True, target=-1))
+    op.request('reset_arm')
+    op.tick()
+    assert op.resetting['settled_ns'] is None and not op.reset_completed
+    assert op.robot.targets[-1][2]['gripper'] == -1
+
+    op.resetting['next_send_ns'] = 0
+    sample['seq'] += 1
+    op.tick()
+    assert len(op.robot.targets) == 2 and op.robot.targets[-1][2]['gripper'] == -1
+    assert op.resetting['settled_ns'] is None
+
+    sample['gripper'] = dict(opened, valid=True, target=-1)
+    op.tick()
+    assert op.resetting['settled_ns'] is not None
+    op.resetting['settled_ns'] = ns()-110_000_000
+    sample['seq'] += 1
+    op.tick()
+    assert op.reset_completed and op.resetting is None
 
 
 @pytest.mark.parametrize('error', [ProtocolError('arm_cancelled'), TimeoutError('arm_feedback_timeout')])
@@ -234,10 +264,12 @@ def test_tcp_reset_reaches_goal_with_bounded_coordinated_references_and_no_recor
     wait_until(lambda:op.resetting is None and not op.view().get("resetting"))
     assert 'at neutral' in op.view()['message']
     assert backend.q == pytest.approx(backend.neutral_pose['q'], abs=.008726646)
-    assert not op.following and not bridge.core.armed and backend.gripper_publish_count == 0
+    assert not op.following and not bridge.core.armed and not backend.gripper_active
+    assert backend.gripper_target == -1 and backend.gripper_publish_count == 1
     assert op.future is None and not list(tmp_path.iterdir())
     assert len(receipts) > 10
     for receipt in receipts:
+        assert receipt['gripper'] == -1
         assert receipt['trajectory']['algorithm'] == 'online_cubic_hermite_v2'
         assert max(abs(v) for v in receipt['trajectory']['dq']) <= .6+1e-9
         assert max(abs(a) for a in receipt['trajectory']['ddq']) <= 1.5+1e-9
@@ -263,24 +295,28 @@ def test_tcp_cancel_removes_trajectory_and_no_targets_follow(live, stop):
     wait_until(lambda:op.resetting is None and not bridge.core.armed)
     wait_until(lambda:bridge.core.trajectory is None)
     count = bridge.core.submitted
+    gripper_count = backend.gripper_publish_count
     time.sleep(.1)
-    assert bridge.core.submitted == count and not op.following
+    assert bridge.core.submitted == count and not op.following and not backend.gripper_active
+    assert backend.gripper_publish_count == gripper_count
 
 
-def test_reset_from_active_teleop_discards_old_ik_and_gripper_control(live):
+def test_reset_from_active_teleop_overrides_closed_gripper_and_discards_old_ik(live):
     backend, bridge, quest, op, _ = live
     op.request('calibrate')
     wait_until(lambda:op.mapping is not None and op.release_seen)
     quest.grip = 1
     quest.trigger = 1
     wait_until(lambda:op.following and backend.gripper_active)
+    assert backend.gripper_target == 1
     op.request('reset_arm')
     wait_until(lambda:op.resetting is not None)
     generation = op.robot.generation
     wait_until(lambda:op.resetting is None and not op.view().get("resetting"))
     assert 'at neutral' in op.view()['message']
     assert backend.q == pytest.approx(backend.neutral_pose['q'], abs=.008726646)
-    assert not backend.gripper_active and not op.following and not op.release_seen
+    assert backend.gripper_target == -1 and not backend.gripper_active
+    assert not op.following and not op.release_seen
     assert op.robot.generation > generation
     quest.grip = 0
     wait_until(lambda:op.release_seen)
@@ -354,6 +390,7 @@ def test_batch_reset_between_returns_to_neutral_before_each_next_episode(live, t
     assert phases.index('resetting') < len(phases)-1-phases[::-1].index('recording')  # Reset, then episode 2.
     assert op.saved_count == 2 and op.attempt_count == 2 and op.batch_reset is None
     assert backend.q == pytest.approx(backend.neutral_pose['q'], abs=.008726646)
+    assert backend.gripper_target == -1 and backend.gripper_publish_count == 1
     index = json.loads((tmp_path/'reset_batch'/'batch.json').read_text(encoding='utf-8'))
     assert index['reset_between'] is True and index['saved'] == 2
     assert not bridge.core.armed  # Each reset ends in a hold; teleop needs release + squeeze.
@@ -366,6 +403,7 @@ def test_batch_without_reset_between_never_moves_the_arm(live, tmp_path):
     op.request('start_recording', name='plain_batch', count=2, seconds=.2, pause=0)
     wait_until(lambda: op.view().get('recording_phase') == 'complete', 20)
     assert op.saved_count == 2 and backend.q == [0.]*7 and bridge.core.submitted == 0
+    assert backend.gripper_publish_count == 0
 
 
 def _pending_batch(op, tmp_path):
