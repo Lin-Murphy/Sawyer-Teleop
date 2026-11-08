@@ -60,6 +60,37 @@ def test_queue_overflow_is_explicit_and_excludes_training(tmp_path, monkeypatch)
         assert not file.attrs["complete"]
 
 
+def test_queued_images_have_a_byte_limit(tmp_path, monkeypatch):
+    import threading
+    from sawyer_teleop import recording
+
+    gate = threading.Event()
+    original = Episode._write
+
+    def delayed(self):
+        gate.wait(3)
+        original(self)
+
+    rgb = np.zeros((48, 64, 3), dtype=np.uint8)
+    monkeypatch.setattr(Episode, "_write", delayed)
+    monkeypatch.setattr(recording, "RECORDING_QUEUE_IMAGE_BYTES", 2 * rgb.nbytes)
+    episode = Episode(tmp_path, {}, ["front"])
+    try:
+        for seq in (1, 2):
+            assert episode.put("frame", ("front", dict(seq=seq, ns=seq, read_start_ns=0, rgb=rgb)))
+        assert not episode.put("frame", ("front", dict(seq=3, ns=3, read_start_ns=0, rgb=rgb)))
+        assert episode.error == "recording_queue_full"
+    finally:
+        episode.finish(True, {"capture_closed": True})
+        gate.set()
+        assert episode.done.wait(5)
+    with h5py.File(episode.result/"raw.hdf5") as data:
+        assert not data.attrs["complete"]
+        assert data["frames/front/seq"][:].tolist() == [1, 2]
+        assert data["frames/front/rgb"].shape == (2, 48, 64, 3)
+        assert data["frames/front/rgb"].chunks == (1, 48, 64, 3)
+
+
 def test_saved_telemetry_preserves_all_rows_precision_and_partial_tail(tmp_path):
     episode = Episode(tmp_path, {}, queue_size=1024)
     expected = []

@@ -27,6 +27,10 @@ CAMERA_LOST_S = 1.               # no frame for this long: camera lost, episode 
 # Feedback stream quality: any lost row is visible as a per-topic sequence gap.
 FEEDBACK_DROP_DEGRADED = .01
 FEEDBACK_GAP_DEGRADED_MS = 100.
+# About 3 seconds at the lab's ~680 messages/s. Bound queued images by bytes
+# as well, including when no telemetry is being recorded.
+RECORDING_QUEUE_ITEMS = 2048
+RECORDING_QUEUE_IMAGE_BYTES = 128 * 1024 * 1024
 
 
 def camera_quality(stamps, fps, start_ns, end_ns):
@@ -88,23 +92,12 @@ def latest_index(source_ns, query_ns):
     return np.searchsorted(np.asarray(source_ns), np.asarray(query_ns), side="right").astype(np.int64)-1
 
 
-def append(group, name, value, dtype=None):
-    value = np.asarray(value, dtype=dtype)
-    if name not in group:
-        group.create_dataset(name, shape=(0,)+value.shape, maxshape=(None,)+value.shape,
-                             dtype=value.dtype, chunks=(1,)+value.shape,
-                             compression="lzf" if value.ndim else None)
-    dataset = group[name]
-    index = len(dataset)
-    dataset.resize(index+1, axis=0)
-    dataset[index] = value
-
-
 class _RowBuffer:
-    """Bounded telemetry batches; owned only by the episode's writer thread."""
+    """Bounded HDF5 batches; owned only by the episode's writer thread."""
 
-    def __init__(self, group):
+    def __init__(self, group, single_row_columns=()):
         self.group = group
+        self.single_row_columns = single_row_columns
         self.rows = []
         self.datasets = {}
 
@@ -120,9 +113,10 @@ class _RowBuffer:
             values = np.asarray([row[name] for row in self.rows])
             if name not in self.datasets:
                 shape = values.shape[1:]
+                chunk_rows = 1 if name in self.single_row_columns else 128
                 self.datasets[name] = self.group.create_dataset(
                     name, shape=(0,)+shape, maxshape=(None,)+shape,
-                    dtype=values.dtype, chunks=(128,)+shape,
+                    dtype=values.dtype, chunks=(chunk_rows,)+shape,
                     compression="lzf" if shape else None)
             dataset = self.datasets[name]
             start = len(dataset)
@@ -132,7 +126,7 @@ class _RowBuffer:
 
 
 class Episode:
-    def __init__(self, root, metadata, camera_names=(), fps=30, queue_size=256):
+    def __init__(self, root, metadata, camera_names=(), fps=30, queue_size=RECORDING_QUEUE_ITEMS):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
@@ -155,6 +149,7 @@ class Episode:
                                  "time": "all *ns fields are A perf_counter ns; source_stamp is the ROS header stamp (s)"})
         self.fps = fps
         self.queue = queue.Queue(queue_size)
+        self._queued_image_bytes = 0
         self.error = None
         self.accepting = True
         self.sealed_ns = None
@@ -169,8 +164,13 @@ class Episode:
         with self.lock:
             if not self.accepting or self.error:
                 return False
+            image_bytes = data[1]["rgb"].nbytes if kind == "frame" else 0
+            if self._queued_image_bytes + image_bytes > RECORDING_QUEUE_IMAGE_BYTES:
+                self.error = "recording_queue_full"
+                return False
             try:
-                self.queue.put_nowait((kind, data))
+                self.queue.put_nowait((kind, data, image_bytes))
+                self._queued_image_bytes += image_bytes
                 return True
             except queue.Full:
                 self.error = "recording_queue_full"
@@ -226,6 +226,7 @@ class Episode:
             stream_session = None
             stream_skipped = {"no_clock_sync": 0, "other_session": 0}
             frames = data.create_group("frames")
+            frame_buffers = {}
             last_frame_ns = {}
             log = (self.path/"events.jsonl").open("w", encoding="utf-8")
             buffers = [states, commands, *streams.values()]
@@ -238,12 +239,15 @@ class Episode:
                         buffer.flush()
                     next_flush = time.monotonic()+.1
                 try:
-                    kind, value = self.queue.get(timeout=max(0., next_flush-time.monotonic()))
+                    kind, value, image_bytes = self.queue.get(timeout=max(0., next_flush-time.monotonic()))
                 except queue.Empty:
                     with self.lock:
                         if self.finish_request is not None:
                             break
                     continue
+                if image_bytes:
+                    with self.lock:
+                        self._queued_image_bytes -= image_bytes
                 if kind == "state":
                     sample = value["sample"]
                     key = (value["session"], sample["seq"])
@@ -288,11 +292,6 @@ class Episode:
                     if frame["seq"] <= frame_sequences.get(name, -1):
                         continue
                     frame_sequences[name] = frame["seq"]
-                    group = frames.require_group(name)
-                    for key in ("ns", "read_start_ns", "seq", "rgb"):
-                        append(group, key, frame[key])
-                    append(group, "source_seq", frame.get("source_seq", -1), "int64")
-                    append(group, "open_count", frame.get("open_count", -1), "int64")
                     fps = self.fps.get(name, 30) if isinstance(self.fps, dict) else self.fps
                     previous = last_frame_ns.get(name)
                     if previous is not None and fps and frame["ns"]-previous > CAMERA_GAP_FACTOR*1e9/fps:
@@ -306,15 +305,20 @@ class Episode:
                     if name not in videos:
                         h, w = rgb.shape[:2]
                         writer = cv2.VideoWriter(str(self.path/(name+".mp4")),
-                                                 cv2.VideoWriter_fourcc(*"mp4v"),
-                                                 self.fps.get(name, 30) if isinstance(self.fps, dict) else self.fps,
-                                                 (w, h))
+                                                 cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
                         if not writer.isOpened():
                             raise RuntimeError("video_writer_failed:" + name)
                         videos[name] = (writer, rgb.shape)
+                        frame_buffers[name] = _RowBuffer(frames.create_group(name), single_row_columns=("rgb",))
+                        buffers.append(frame_buffers[name])
                     writer, shape = videos[name]
                     if rgb.shape != shape:
                         raise RuntimeError("camera_resolution_changed")
+                    frame_buffers[name].append({
+                        "ns": frame["ns"], "read_start_ns": frame["read_start_ns"], "seq": frame["seq"],
+                        "source_seq": np.int64(frame.get("source_seq", -1)),
+                        "open_count": np.int64(frame.get("open_count", -1)), "rgb": rgb,
+                    })
                     writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
                 elif kind == "stream":
                     for row in value:
