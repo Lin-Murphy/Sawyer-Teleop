@@ -258,17 +258,17 @@ Web A 启动后常驻采集 `operator.json` 的 `cameras`，在 Live status 下�
 - **RealSense D435（workspace）**：按 DirectShow 名 `Intel(R) RealSense(TM) Depth Camera 435 with RGB Module RGB` 打开，只取 RGB，免装驱动。找不到名字即报错，不会回退到笔记本自带摄像头。
 - **Sandberg 腕部相机（0c45:627b）**：Windows 没有可用签名驱动，用系统自带 WinUSB + 项目内用户态读取器（`backend: "sn9c20x"`）。首次或**换了 USB 口**后需在设备管理器指定一次：
   “USB20 Camera” → 更新驱动程序 → 浏览我的电脑 → 让我从列表中选取 → Universal Serial Bus devices → 厂商 / 型号均选 “WinUsb Device” → 警告点“是”。
-  **必须直接插电脑 USB 口**：经 WCH 扩展坞（1a86:8095）时高带宽传输约 2 s 后掉线。成像参数在 `wrist.controls`，与 `sandberg_camera/camera_profile.json` 一致。
+  **必须直接插电脑 USB 口**：经 WCH 扩展坞（1a86:8095）时高带宽传输约 2 s 后掉线。成像参数在 `wrist.controls`。默认值由用户指定为 `exposure 100 / gain 3`（2026-11-09；未在任务桌面实测饱和情况），红蓝平衡保持原 33 / 28，不做颜色矫正（用户要求腕部输出传感器原始颜色）。代码支持可选的 `color_correction`（主机端 3×3 RGB 矩阵），默认不配置即不处理。Linux 的 `sandberg_camera/camera_profile.json` 未同步。原始 Bayer 模式下 `brightness` / `contrast` / `saturation` 不生效，只有曝光、增益、红蓝平衡和少量伽马有效。
 - 依赖：Windows 运行时需 `libusb1==3.4.0`（`Setup.cmd` 会按 pyproject 安装；`Test.cmd env` 自检会导入 `usb1`）。
 - 同一相机同一时间只能被一个 Web A 占用；改配置或代码后先在原 Start-A 窗口 Ctrl+C 再重启。
 
-## 实验室 Reset arm 姿态（2026-11-07）
+## 实验室 Reset arm 姿态（2026-11-07，2026-11-09 按现场当前关节角更新）
 
 实体 Sawyer 的 Reset arm 目标改为现场实测姿态（rad，`right_j0`–`right_j6`）：
-`0.932630859375, -0.975340820313, -1.853528320312, 1.354167968750, 0.580955078125, 1.943027343750, 4.017021484375`。
+`1.2704287109375, -1.1166728515625, -1.3760634765625, 1.06116015625, 0.5706650390625, 1.9465263671875, 3.327021484375`。
 来源唯一为 `config/lab-neutral-pose.yaml`：`Start-B-Real.sh` 在只读图检查后 `rosparam load` 为
 `/named_poses/right/poses/neutral`，B 启动时读取一次，经握手 `hello.neutral_pose` 发给 A；A 不保存旧值。
-J6=4.017 rad 只适用于实机 ±4.7124 模型，不用于 Gazebo（Gazebo 仍用镜像内 named pose）。
+J6=3.327 rad 超过 ±π，只适用于实机 ±4.7124 模型，不用于 Gazebo（Gazebo 仍用镜像内 named pose）。
 
 生效步骤：A 断开 → 停止旧 B → 用新 deploy 替换实验室 B 的 `config/lab-neutral-pose.yaml`
 （或整个目录，保留现场 `config/real-b.env`）→ `--check` → 重启 B → A 重新连接 / 校准。
@@ -374,8 +374,8 @@ SAWYER_GRIPPER_PORT="/dev/serial/by-id/实际设备名称"
 串口已失联、进程被强杀或系统断电时，无法保证软件保持成功；B 日志/快照会保留可检测的故障。
 
 状态缓存提供 `position_ticks`、`target_ticks`、状态、故障、时间与编码器端点；原始状态/事件日志保留这些信息。
-A 更新后，HDF5 另存 `gripper_position_ticks` / `gripper_target_ticks` / `gripper_ticks_valid` / `gripper_feedback_age_ms`。
-未标定指间距，原米单位字段不会被标为有效。
+A 更新后，HDF5 另存 `gripper_position_ticks` / `gripper_target_ticks` / `gripper_ticks_valid` / `gripper_feedback_age_ms`
+和 0–1 编码器刻度 `gripper_open_fraction`。未标定指间距，不再写米单位占位字段（2026-11-09）。
 
 ## 联合验收待办
 

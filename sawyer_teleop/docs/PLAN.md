@@ -1,12 +1,61 @@
 # 项目状态
 
-更新：2026-11-08。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
+更新：2026-11-09。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
 
 > 2026-10-29 发布整理：Windows 入口合并为仓库根目录的 `Setup.cmd` / `Start-A.cmd` / `Start-B.cmd` / `Test.cmd`；
 > 文档合并为 SETUP / USAGE / TROUBLESHOOTING / DEVELOPMENT。下文历史条目里的旧脚本名（Install-Dev、Test-A、Stop-B、Install-Quest 等）、
 > 旧文档名和 `rog-local/`、`windows-local/artifacts/` 证据链接均指整理前的原作者本机环境，未随仓库发布。
 
 ## 当前决定
+
+### Web 相机曝光 / 增益滑条（2026-11-09）
+
+**仅更新并重启 A；B 无需更新。** 用户要求在 Web 上手动调两路相机的曝光和增益。每路画面下加 Exposure / Gain 滑条
+（RealSense 另有 Auto exposure），松手经 `camera_controls` 动作生效并写回 `operator.json`；录制中拒绝修改，保证同一条录制参数不变。
+腕部相机在 USB 子进程里直接写 OV7660 寄存器，不重开设备（此前频繁重开曾导致 USB 超时）；RealSense 用 DirectShow 属性。
+RealSense 实测：曝光 -13..0 有效、增益上限 128、0.75 恢复自动曝光；滑条曝光上限取 -5，避免超过 30 Hz 帧时长。
+经 CameraHub 在线调节 RealSense 亮度随之变化，未重开、保持 20 FPS。相机与 Web 测试全部通过。
+**腕部在线调节未做真机验证**：测试时腕部相机物理断开（系统显示未连接），只有寄存器写入的单元测试。
+页面 JS 本机无 node，未做语法检查，需在浏览器中确认。证据见 [验证记录](../../windows-local/artifacts/camera-sliders-20261109/verification.json)。
+下一步：重插腕部相机、重启 Web A，在页面上拖动两路滑条确认生效与保存。
+
+### Reset arm 姿态改为现场当前位置（2026-11-09）
+
+**只需更新 B 的 `config/lab-neutral-pose.yaml` 并重启 B；A 无需更新。** 用户在 B 上 `rostopic echo -n 1 /robot/joint_states`
+（stamp 1794246281.398，速度均为 -0.001，即静止）取得当前位置，按关节名取 `right_j0`–`right_j6`：
+`1.2704287109375, -1.1166728515625, -1.3760634765625, 1.06116015625, 0.5706650390625, 1.9465263671875, 3.327021484375`，
+原文精度写入，不取整。七轴均在实机限位内，离限位最近的是 J5（余量 1.03 rad）；J6=3.327 超过 ±π，只适用于实机 ±4.7124。
+旧姿态 `0.9326, -0.9753, -1.8535, 1.3542, 0.5810, 1.9430, 4.0170` 作废。已同步源码与 `deploy/B-Lab-Ubuntu` 的 yaml、
+`test_lab_neutral_pose.py`、两份 DEPLOYMENT.md，并更新部署清单中这两个文件的哈希；`test_lab_neutral_pose` /
+`test_reset_arm` / `test_deployment_folders` 全部通过（2 跳过）。未在实机执行 Reset。
+下一步：替换 B 上的 yaml → `--check` → 重启 B → A 重连；首次 Reset 前确认路径无障碍、急停可用。
+
+### 腕部相机曝光与颜色（2026-11-09）
+
+**仅更新 A（代码 + 配置）并重启 Web A；B 无需更新。** 旧参数 exposure 300 / gain 4 下任务桌面一半以上像素卡在传感器上限，
+三通道上限不同（蓝最低），饱和的白色因此偏青绿。第一轮在地面场景调为 exposure 70 / gain 4，到任务桌面仍饱和，已作废。
+第二轮在任务桌面上方实测：gain 4 时曝光降到 20 仍有 14% 饱和；改为 **exposure 150 / gain 0 / red 29 / blue 26**，饱和 0%。
+原始 Bayer 模式下 brightness / contrast / saturation 不生效，因此新增主机端 `color_correction`（`cameras.py`，3×3 RGB 仿射，
+预览与录制前统一应用，录制 `camera_config` 记录矩阵）。拟合：白桌面定三通道增益 1.120 / 1.151 / 1.125；
+红方块和黄碗相对 RealSense 的饱和度差 2.2 倍，因 ×2 会放大镜头色斑，取 ×1.5。按 Web A 同路径实测两相机状态均为 ok，
+腕部 p50 171 / p95 197、饱和 0%。两份 `operator.json` 已同步；Linux `sandberg_camera/camera_profile.json` 未改。
+调参中腕部 USB 多次重开后超时，需人工重插才恢复。证据见 [调参记录](../../windows-local/artifacts/wrist-exposure-20261109/verification.json)。
+**同日撤回颜色处理**：用户实看后认为颜色不对，要求腕部回到原始颜色。已从两份 `operator.json` 删除 `color_correction`，红蓝平衡恢复 33 / 28；保留 exposure 150 / gain 0（解决过曝）及代码中的可选矫正功能（不配置即不生效）。随后按用户要求曝光改回 300，增益保持 0（最终 exposure 300 / gain 0 / red 33 / blue 28，无颜色矫正）；300 / 0 未在任务桌面实测，增益 0 时 150 的桌面 p95 为 171。之后用户一度指定 280 / 6，**最终改为默认 exposure 100 / gain 3 / red 33 / blue 28，无颜色矫正**（两份 `operator.json` 已同步）；该组合未在任务桌面实测（参照：增益 4 时曝光 20–45 桌面仍有 14–34% 像素饱和，增益 3 略暗，界面可能仍提示 Overexposed）。下一步：重启 Web A 复看。
+
+### 录制成功标记与夹爪字段（2026-11-09）
+
+**仅更新并重启 A；B 无需更新。** 起因：检查 `episode_20261107T173703` 时发现 `task_success` 恒为 null、
+`gripper_position_m` 全零且 `gripper_valid` 全 False（未标定占位）。决定：VLA 夹爪只学开 / 关，不做毫米标定。
+操作员主动保存（Save / A 键 / End recording）写 `task_success: true`（失败示范按 B 丢弃）；到时自动保存、相机丢失、
+退出、写入错误仍为 null。删除 `gripper_position_m` / `gripper_valid`，新增 `gripper_open_fraction`（编码器 0 闭–1 开，非间距）。
+导出 demo 新增 `episode_task_success`，片段级 `task_success` 仍为 unknown。
+
+相关 6 个测试文件 86 项通过（pytest 默认临时目录在沙箱内权限错误，改 `--basetemp` 重跑）；全量回归未跑。
+`scripts/migrate_gripper_and_success.py` 已迁移 `windows-local/data` 下 10 条录制：8 条标为成功，
+2 条 `recording_queue_full` 保持 null；全部删除占位字段并补 `gripper_open_fraction`。旧 zip 副本未改。
+源码 / 结果哈希见 [验证记录](../../windows-local/artifacts/gripper-success-labels-20261109/verification.json)。
+未运行 Gazebo、Quest 或真机。遗留：录制的 `task` 文字仍为空；2.3 s、3.3 s 两条很短，按约定已标成功，需人工确认。
+下一步：A 重启后录一条，确认 manifest 的 `task_success` 与新夹爪字段。
 
 ### 本地改动合并核验（2026-11-08）
 
