@@ -254,7 +254,14 @@ class Episode:
                     if sample["valid"] and key != last_state_seq:
                         last_state_seq = key
                         gripper = sample.get("gripper") or {}
-                        fingers = gripper.get("position_m")
+                        ticks = gripper.get("position_ticks")
+                        ticks_valid = bool(gripper.get("valid") and ticks is not None)
+                        open_ticks, closed_ticks = gripper.get("open_ticks"), gripper.get("closed_ticks")
+                        # Encoder scale only (0 closed endpoint, 1 open endpoint);
+                        # finger distance is uncalibrated and deliberately not recorded.
+                        open_fraction = (float(np.clip((ticks-closed_ticks)/(open_ticks-closed_ticks), 0., 1.))
+                                         if ticks_valid and open_ticks is not None and closed_ticks is not None
+                                         and open_ticks != closed_ticks else float("nan"))
                         row = {"ns": sample.get("available_ns", sample["captured_ns"])+value["clock_offset_ns"],
                                "captured_ns": sample["captured_ns"]+value["clock_offset_ns"],
                                "source_stamp": sample.get("source_stamp", 0.),
@@ -264,10 +271,9 @@ class Episode:
                                "eef_pos": sample["pose"]["p"], "eef_quat": sample["pose"]["q"],
                                "eef_twist": sample.get("twist") or [0.]*6,
                                "eef_twist_valid": sample.get("twist") is not None,
-                               "gripper_position_m": fingers if fingers is not None else [0., 0.],
-                               "gripper_valid": bool(gripper.get("valid") and fingers is not None),
-                               "gripper_position_ticks": gripper.get("position_ticks") or 0,
-                               "gripper_ticks_valid": bool(gripper.get("valid") and gripper.get("position_ticks") is not None),
+                               "gripper_position_ticks": ticks if ticks is not None else 0,
+                               "gripper_ticks_valid": ticks_valid,
+                               "gripper_open_fraction": open_fraction,
                                "gripper_target_ticks": gripper.get("target_ticks") or 0,
                                "gripper_feedback_age_ms": gripper.get("age_ms") or 0.}
                         states.append(row)
@@ -355,8 +361,15 @@ class Episode:
             quality = None
             if not self.error:
                 quality = self._quality_and_alignment(data, ended_ns, stop_result, stream_skipped)
+            # Lab convention: the operator discards failed demonstrations, so an
+            # explicit operator save is a success label. Time-limit, camera-loss,
+            # shutdown and failed writes were not judged by the operator: unknown.
+            task_success = True if (save and stop_result.get("operator_decision")
+                                    and not self.error) else None
             self.metadata.update(ended_ns=ended_ns, stop=stop_result, quality=quality,
-                                 task_success=None, recording_error=self.error)
+                                 task_success=task_success,
+                                 task_success_source="operator_saved" if task_success else None,
+                                 recording_error=self.error)
             data.attrs["metadata"] = json.dumps(self.metadata, ensure_ascii=False)
             # Completion is a closed capture, not a statement that the robot is stopped.
             data.attrs["complete"] = bool(not self.error and (stop_result.get("holding") or stop_result.get("capture_closed")))

@@ -13,7 +13,10 @@ python -m sawyer_teleop.cli export <录制目录> <输出.hdf5>
 ```
 
 Windows 与其他入口统一见[使用指南](../USAGE.md)。输出已存在时拒绝覆盖。
-fake / 合成自检数据不可作为真实任务示范；保存成功不自动代表任务成功。
+fake / 合成自检数据不可作为真实任务示范。实验室约定失败示范按 B 丢弃，因此操作员主动保存
+（Save / A 键 / End recording）写 `task_success: true`、`task_success_source: operator_saved`；
+到时自动保存、相机丢失、退出保存或写入错误保持 `null`。导出的 demo 是录制片段，
+`task_success` 仍为 `unknown`，整条录制的结果见 `episode_task_success`。
 
 ## 原始数据 raw.hdf5
 
@@ -23,8 +26,11 @@ fake / 合成自检数据不可作为真实任务示范；保存成功不自动�
 - `commands/{ns,uncertainty_ns,q,seq,feedback_seq,generation,segment}`
   保存 B 回执确认已提交的 7 维绝对关节目标。仅发出但未提交的目标不写入动作数组。
 - 夹爪扩展：`commands/gripper` 为 -1 张开 / +1 闭合，0 代表无夹爪指令，
-  `commands/gripper_valid` 标识指令是否存在；`states/gripper_position_m` 保存两指实际位置，
-  `states/gripper_valid` 标识位置是否可用（不可用时零值只是占位）。字段与各自的命令 / 状态逐行对齐。
+  `commands/gripper_valid` 标识指令是否存在。夹爪状态只记编码器：`states/gripper_position_ticks`、
+  `gripper_target_ticks`、`gripper_ticks_valid`、`gripper_feedback_age_ms`，以及
+  `gripper_open_fraction` = (ticks − 闭合端点) / (张开端点 − 闭合端点)，裁剪到 0–1（0 闭合、1 张开），
+  无效时为 NaN。它只是编码器刻度，**不是两指间距**；未标定，不写米 / 毫米字段
+  （2026-11-09 起删除占位的 `gripper_position_m` / `gripper_valid`）。字段与各自的命令 / 状态逐行对齐。
   `submitted` 事件同步记录 `submitted_gripper`。旧数据没有这些字段仍可读取。
   当前 robomimic 导出及策略仍为七维关节动作，不包含夹爪任务训练。
 - `frames/<相机名>/{ns,read_start_ns,seq,rgb}`：RGB uint8 NHWC。
@@ -76,7 +82,7 @@ IK 各环节耗时、输入到 B 提交的估计时延、原始 / 平滑目标�
 
 ```text
 data/                        attrs: total, env_args, control_hz, action_normalization
-  demo_0/                    attrs: num_samples, source_episode, truncated, task_success
+  demo_0/                    attrs: num_samples, source_episode, truncated, task_success, episode_task_success
     obs/
       joint_pos              N × 7, float32, rad
       joint_vel              N × 7, float32, rad/s

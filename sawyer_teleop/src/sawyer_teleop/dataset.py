@@ -121,7 +121,8 @@ def export_dataset(root, output, hz=50, valid_fraction=.2, seed=42):
                             fn, fnv = causal_indices(group["ns"][:], grid+step, 250_000_000)
                             images[camera] = (fi, fn)
                             valid &= fv & fnv
-                        required = json.loads(source.attrs["metadata"])["cameras"]
+                        metadata = json.loads(source.attrs["metadata"])
+                        required = metadata["cameras"]
                         if set(required) != set(images):
                             continue
                         for left, right in runs(valid):
@@ -155,7 +156,10 @@ def export_dataset(root, output, hz=50, valid_fraction=.2, seed=42):
                             demo.create_dataset("dones", data=done)
                             demo.attrs["num_samples"] = count
                             demo.attrs["source_episode"] = path.parent.name
+                            # A demo is a slice of an episode; success belongs to the episode.
                             demo.attrs["task_success"] = "unknown"
+                            demo.attrs["episode_task_success"] = (
+                                "true" if metadata.get("task_success") is True else "unknown")
                             demo.attrs["truncated"] = True
                             split_names[split].append(name.encode())
                             demos.append((name, count))

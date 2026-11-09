@@ -24,6 +24,23 @@ def test_saved_incomplete_episode_marked(tmp_path):
         assert not file.attrs["complete"]
 
 
+@pytest.mark.parametrize("stop, expected", [
+    ({"capture_closed": True, "operator_decision": True}, True),
+    ({"capture_closed": True}, None),  # time limit: the operator did not judge it
+    ({"capture_closed": True, "camera_lost": "front"}, None),
+    ({"holding": False, "reason": "operator_shutdown"}, None),
+])
+def test_operator_save_labels_task_success(tmp_path, stop, expected):
+    # Lab convention: failed demonstrations are discarded with B, so an
+    # explicit operator save is a success label; other saves stay unknown.
+    episode = Episode(tmp_path, {})
+    assert episode.finish(True, stop).wait(5)
+    manifest = json.loads((episode.result/"manifest.json").read_text(encoding="utf-8"))
+    assert manifest["task_success"] is expected
+    with h5py.File(episode.result/"raw.hdf5") as data:
+        assert json.loads(data.attrs["metadata"])["task_success"] is expected
+
+
 def test_no_future_observations():
     indices, valid = causal_indices([100, 200, 300], np.array([99, 100, 250, 500]), 100)
     assert list(indices) == [-1, 0, 1, 2]
@@ -100,14 +117,15 @@ def test_saved_telemetry_preserves_all_rows_precision_and_partial_tail(tmp_path)
         session, seq = ("first", index) if index < 37 else ("second", index-37)
         stamp = 1_000_000_000_000_000+index*10_000_000+123
         q = [float(index)+axis/123456789 for axis in range(7)]
-        fingers = [.01+index/123456789, .02] if index % 2 else None
+        ticks = 1024+index*30 if index % 2 else None
         state = {"session": session, "clock_offset_ns": 13, "clock_uncertainty_ns": 17,
                  "sample": {"valid": True, "seq": seq, "captured_ns": stamp,
                             "available_ns": stamp+19, "source_stamp": index+.123456789012345,
                             "pose_source_stamp": index+.234567890123456,
                             "q": q, "dq": [x/3 for x in q],
                             "pose": {"p": q[:3], "q": [0., 0., 0., 1.]},
-                            "gripper": {"valid": fingers is not None, "position_m": fingers}}}
+                            "gripper": {"valid": ticks is not None, "position_ticks": ticks,
+                                        "open_ticks": 3766, "closed_ticks": 1024}}}
         assert episode.put("state", state)
         assert episode.put("state", state)  # Duplicate feedback must not add a row.
         assert episode.put("state", dict(state, sample=dict(state["sample"], valid=False)))
@@ -116,7 +134,7 @@ def test_saved_telemetry_preserves_all_rows_precision_and_partial_tail(tmp_path)
         event = {"reason": "precision", "a_ns": stamp, "index": index, "q": q}
         assert episode.put("event", event)
         events.append(event)
-        expected.append((stamp, seq, q, fingers))
+        expected.append((stamp, seq, q, ticks))
     assert episode.finish(True, {"capture_closed": True}).wait(5)
     assert episode.error is None
     with h5py.File(episode.result/"raw.hdf5", "r") as data:
@@ -124,15 +142,19 @@ def test_saved_telemetry_preserves_all_rows_precision_and_partial_tail(tmp_path)
         assert all(len(ds) == 75 for name in ("states", "commands") for ds in data[name].values())
         assert data["states/ns"].dtype == np.int64
         assert data["states/q"].dtype == np.float64
-        assert data["states/gripper_valid"].dtype == np.bool_
+        assert data["states/gripper_ticks_valid"].dtype == np.bool_
+        # Uncalibrated metric placeholders are no longer written.
+        assert "gripper_position_m" not in data["states"] and "gripper_valid" not in data["states"]
         np.testing.assert_array_equal(data["states/captured_ns"][:], [x[0]+13 for x in expected])
         np.testing.assert_array_equal(data["states/ns"][:], [x[0]+32 for x in expected])
         np.testing.assert_array_equal(data["states/source_seq"][:], [x[1] for x in expected])
         np.testing.assert_array_equal(data["states/q"][:], [x[2] for x in expected])
         np.testing.assert_array_equal(data["states/source_stamp"][:], [i+.123456789012345 for i in range(75)])
         np.testing.assert_array_equal(data["states/pose_source_stamp"][:], [i+.234567890123456 for i in range(75)])
-        np.testing.assert_array_equal(data["states/gripper_position_m"][:], [x[3] or [0., 0.] for x in expected])
-        np.testing.assert_array_equal(data["states/gripper_valid"][:], [bool(x[3]) for x in expected])
+        np.testing.assert_array_equal(data["states/gripper_position_ticks"][:], [x[3] or 0 for x in expected])
+        np.testing.assert_array_equal(data["states/gripper_ticks_valid"][:], [x[3] is not None for x in expected])
+        np.testing.assert_allclose(data["states/gripper_open_fraction"][:],
+                                   [(x[3]-1024)/2742 if x[3] is not None else np.nan for x in expected])
         np.testing.assert_array_equal(data["commands/ns"][:], [x[0]+23 for x in expected])
         np.testing.assert_array_equal(data["commands/seq"][:], list(range(75)))
         np.testing.assert_array_equal(data["commands/q"][:], [x[2] for x in expected])
@@ -155,7 +177,9 @@ def test_dynamixel_ticks_are_recorded_without_claiming_metric_finger_distance(tm
         assert data['states/gripper_ticks_valid'][0]
         assert data['states/gripper_target_ticks'][0] == 1024
         assert data['states/gripper_feedback_age_ms'][0] == 12.5
-        assert not data['states/gripper_valid'][0]
+        assert 'gripper_valid' not in data['states']
+        # No encoder endpoints: no normalized value is invented.
+        assert np.isnan(data['states/gripper_open_fraction'][0])
 
 
 def test_telemetry_write_failure_never_marks_saved_capture_complete(tmp_path, monkeypatch):
@@ -183,9 +207,10 @@ def test_end_to_end_export_and_resume(tmp_path):
             assert len(raw["commands/gripper"]) == len(raw["commands/q"])
             assert np.all(raw["commands/gripper"][:] == -1)
             assert np.all(raw["commands/gripper_valid"][:])
-            assert len(raw["states/gripper_valid"]) == len(raw["states/q"])
-            # Fake has no physical finger feedback; do not label placeholders valid.
-            assert not np.any(raw["states/gripper_valid"][:])
+            assert len(raw["states/gripper_ticks_valid"]) == len(raw["states/q"])
+            # Fake has no gripper encoder feedback; do not label placeholders valid.
+            assert not np.any(raw["states/gripper_ticks_valid"][:])
+            assert "gripper_position_m" not in raw["states"]
     with h5py.File(tmp_path/"dataset.hdf5") as file:
         normal = json.loads(file["data"].attrs["action_normalization"])
         for demo in file["data"].values():

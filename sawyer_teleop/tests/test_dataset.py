@@ -88,3 +88,13 @@ def test_failed_export_only_cleans_its_own_temporary_file(batch, tmp_path):
     assert partial.read_bytes() == b'prior data'
     assert not output.exists()
     assert list(tmp_path.glob('*.partial')) == [partial]
+
+
+def test_export_carries_episode_task_success(batch, tmp_path):
+    with h5py.File(batch/'episode_test'/'raw.hdf5', 'r+') as data:
+        data.attrs['metadata'] = json.dumps({'cameras': [], 'backend': 'fake', 'task_success': True})
+    dataset.export_dataset(batch, tmp_path/'dataset.hdf5')
+    with h5py.File(tmp_path/'dataset.hdf5') as data:
+        demo = data['data/demo_0']
+        assert demo.attrs['episode_task_success'] == 'true'
+        assert demo.attrs['task_success'] == 'unknown'  # a demo is a slice, not a whole attempt

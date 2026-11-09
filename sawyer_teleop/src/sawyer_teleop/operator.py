@@ -423,7 +423,8 @@ class Operator:
         return {"name": camera.name, "label": value("label"), "device": camera.device,
                 "width": camera.width, "height": camera.height, "fps": camera.fps,
                 "source_fps": value("source_fps"), "backend": camera.backend,
-                "controls": value("controls"), "measured_fps": value("measured_fps"),
+                "controls": value("controls"), "color_correction": value("color_correction"),
+                "measured_fps": value("measured_fps"),
                 "driver_stats": value("driver_stats"),
                 # No calibration exists yet; keep the keys so later data can fill them.
                 "intrinsics": None, "extrinsics": None}
@@ -819,9 +820,9 @@ class Operator:
                 # Cancel continuation before saving; also covers a countdown click
                 # arriving just after the next capture has started.
                 self._stop_batch()
-                self._finish(True)
+                self._finish(True, {"operator_decision": True})
             elif "save" in actions or "discard" in actions:
-                self._finish("save" in actions)
+                self._finish("save" in actions, {"operator_decision": True})
             elif "start_recording" in actions:
                 self._start_recording(parameters.get("start_recording", {}), value)
             self._check_cameras_live()
