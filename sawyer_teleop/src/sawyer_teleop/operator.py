@@ -323,8 +323,8 @@ class Operator:
         self.robot.snapshot()
         if self.mapping is None:
             raise RuntimeError("Calibrate before starting a recording")
-        if input_value is not None and (not input_value.get("valid") or self.calibration_epoch != input_value.get("epoch")):
-            raise RuntimeError("Quest input or calibration is invalid. Restore it before restarting the recording.")
+        # No Quest validity check here: a brief tracking loss when the next batch
+        # episode starts must not stop the batch. Arm motion stays gated in tick().
         name = str(options.get("name", "")).strip()
         automatic_name = not name
         if automatic_name:

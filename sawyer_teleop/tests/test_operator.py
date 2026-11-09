@@ -276,15 +276,14 @@ def test_next_capture_waits_for_writer_even_with_zero_interval(running, monkeypa
         release.set()
 
 
-def test_invalid_input_at_countdown_end_cancels_batch(running):
+def test_invalid_input_at_countdown_end_does_not_cancel_batch(running):
     _, _, quest, operator = running
     operator.request('start_recording', name='tracking', count=2, seconds=.15, pause=.3)
     wait_until(lambda: operator.view().get('recording_phase') == 'countdown')
     quest.valid = False
-    wait_until(lambda: not operator.auto_recording)
+    wait_until(lambda: operator.attempt_count == 2)
+    assert operator.auto_recording and not operator.following
     quest.valid = True
-    time.sleep(.4)
-    assert operator.attempt_count == 1 and operator.episode is None
 
 
 @pytest.mark.parametrize('action', ['save', 'discard', 'end_recording'])

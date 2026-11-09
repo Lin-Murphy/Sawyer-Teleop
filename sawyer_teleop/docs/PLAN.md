@@ -8,6 +8,15 @@
 
 ## 当前决定
 
+### 批量录制下一条开始时不再检查 Quest 输入（2026-11-09）
+
+**仅更新并重启 A。** ROG 实测：批量间隔结束时人稍一移动（头显/手柄瞬时跟丢）即报
+"Quest input or calibration is invalid…" 并终止整批。用户决定去掉该检查：`operator._start_recording` 删除 Quest 有效性 /
+校准 epoch 校验，仍保留"未校准不能录制"（`mapping is None`）。机械臂运动仍由 `tick()` 的输入与 epoch 检查把关（无效即暂停、
+坐标系变化即要求重新校准），因此只影响数据：该条可能包含一段手柄无效或需重新校准的时间。
+测试 `test_invalid_input_at_countdown_end_cancels_batch` 改为 `..._does_not_cancel_batch`（期望整批继续、手臂不跟随）；
+仅跑 test_operator / test_recording / test_reset_arm，通过。未在 ROG 上验证。
+
 ### "Reset arm between episodes" 网页默认勾选（2026-11-09）
 
 **仅更新并重启 A。** 用户要求该复选框默认勾选：`web/index.html` 的 `resetBetween` 加 `checked`，USAGE 同步。
