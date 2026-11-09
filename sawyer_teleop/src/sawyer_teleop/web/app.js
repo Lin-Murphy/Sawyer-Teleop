@@ -92,8 +92,9 @@ function cameraView(info){
   let view=cameraViews.get(info.name);if(view)return view;
   const figure=document.createElement('figure'),frame=document.createElement('div'),img=document.createElement('img'),overlay=document.createElement('div'),caption=document.createElement('figcaption'),label=document.createElement('strong'),state=document.createElement('span');
   figure.className='camera';frame.className='camera-frame';overlay.className='camera-overlay';img.alt=info.label;img.hidden=true;
-  frame.append(img,overlay);caption.append(label,state);figure.append(frame,caption);$('cameraGrid').append(figure);
-  view={info,img,overlay,label,state,url:'',running:false};cameraViews.set(info.name,view);return view;
+  const controls=document.createElement('div');controls.className='camera-controls';
+  frame.append(img,overlay);caption.append(label,state);figure.append(frame,caption,controls);$('cameraGrid').append(figure);
+  view={info,img,overlay,label,state,controls,sliders:{},signature:'',url:'',running:false};cameraViews.set(info.name,view);return view;
 }
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 async function cameraLoop(view){
@@ -113,6 +114,47 @@ async function cameraLoop(view){
   }
   view.running=false;
 }
+// Live exposure / gain. Values apply on release, are saved to operator.json, and are
+// locked while recording so one episode keeps one set of imaging parameters.
+function controlText(view,key,value){
+  if(value==null||value==='')return '—';
+  if(key==='exposure'&&view.info.controls&&'auto_exposure' in view.info.controls){const v=Number(value);return v<0?'1/'+Math.round(2**-v)+' s':2**v+' s';}
+  return String(value);
+}
+function buildControls(view,spec){
+  const keys=Object.keys(spec).sort(),signature=JSON.stringify(keys.map(k=>[k,spec[k]?.min,spec[k]?.max]));
+  if(view.signature===signature)return;
+  view.signature=signature;view.sliders={};view.controls.replaceChildren();
+  for(const key of ['exposure','gain']){
+    if(!spec[key])continue;
+    const row=document.createElement('label'),name=document.createElement('span'),input=document.createElement('input'),value=document.createElement('output');
+    row.className='camera-slider';name.textContent=key==='exposure'?'Exposure':'Gain';
+    input.type='range';input.min=spec[key].min;input.max=spec[key].max;input.step=spec[key].step||1;
+    input.oninput=()=>{view.dragging=key;value.textContent=controlText(view,key,input.value);};
+    input.onchange=async()=>{const changes={[key]:Number(input.value)};if(key==='exposure'&&view.auto)view.auto.checked=false;await command('camera_controls',{name:view.info.name,controls:changes});view.dragging=null;};
+    row.append(name,input,value);view.controls.append(row);view.sliders[key]={input,value};
+  }
+  view.auto=null;
+  if('auto_exposure' in spec){
+    const row=document.createElement('label'),box=document.createElement('input');row.className='check camera-auto';box.type='checkbox';
+    box.onchange=()=>command('camera_controls',{name:view.info.name,controls:{auto_exposure:box.checked}});
+    row.append(box,document.createTextNode(' Auto exposure'));view.controls.append(row);view.auto=box;
+  }
+}
+function renderControls(view,info){
+  const spec=info.controls;view.controls.hidden=!spec;if(!spec)return;
+  buildControls(view,spec);
+  const s=last?.state||{},recording=s.auto_recording||['recording','review','finishing','countdown'].includes(s.recording_phase);
+  const locked=!last?.owner||!networkOK||recording||busy>0;
+  view.controls.title=recording?'Locked while recording':!last?.owner?'Acquire the controls to adjust':'';
+  for(const [key,{input,value}] of Object.entries(view.sliders)){
+    const auto=key==='exposure'&&spec.auto_exposure===true;
+    input.disabled=locked||auto;
+    if(view.dragging!==key&&document.activeElement!==input&&spec[key].value!=null)input.value=spec[key].value;
+    if(view.dragging!==key)value.textContent=auto?'Auto':controlText(view,key,spec[key].value);
+  }
+  if(view.auto){view.auto.disabled=locked;if(document.activeElement!==view.auto)view.auto.checked=spec.auto_exposure===true;}
+}
 function renderCameras(list){
   if(!list.length&&!cameraViews.size){$('cameraGrid').textContent='No cameras configured.';return;}
   for(const info of list){
@@ -123,6 +165,7 @@ function renderCameras(list){
     view.state.title=exposure?`Brightness median ${fmt(exposure.p50,0)} · dark ${fmt(exposure.dark_pct)}% · clipped ${fmt(exposure.channel_clip_pct)}% · RGB mean ${exposure.rgb_mean.map(v=>fmt(v,0)).join('/')}`:'';
     view.state.classList.toggle('bad',!info.live||!!badExposure);
     if(!info.live){view.img.hidden=true;view.overlay.hidden=false;view.overlay.textContent=info.error||'Waiting for camera…';}
+    renderControls(view,info);
     if(!view.running)cameraLoop(view);
   }
 }

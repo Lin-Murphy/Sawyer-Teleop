@@ -67,6 +67,12 @@ NATIVE_FPS = 30.0
 LINE_PERIOD_S = (1 / 19.50 - 1 / NATIVE_FPS) / 274
 
 
+# Live-adjustable ranges exposed to the Web sliders. Exposure is in OV7660 line units;
+# above 547 the sensor needs extra dummy lines, so the ceiling keeps the 20 Hz frame
+# (547 + 274 dummy lines at 20 Hz). Gain is an index into OV_GAIN (1x .. 16x).
+LIVE_RANGES = {"exposure": (1, 800), "gain": (0, len(OV_GAIN) - 1)}
+
+
 def validate_controls(controls):
     merged = dict(DEFAULT_CONTROLS, **(controls or {}))
     unknown = set(merged) - set(DEFAULT_CONTROLS)
@@ -74,6 +80,10 @@ def validate_controls(controls):
         raise ValueError("Unknown SN9C20x controls: " + ", ".join(sorted(unknown)))
     if merged["gain_automatic"]:
         raise ValueError("Automatic gain is not implemented; set gain_automatic=0")
+    if type(merged["gain"]) is not int or not 0 <= merged["gain"] < len(OV_GAIN):
+        raise ValueError("SN9C20x gain must be an integer index 0..%d" % (len(OV_GAIN) - 1))
+    if type(merged["exposure"]) is not int or not 0 <= merged["exposure"] <= 0x1780:
+        raise ValueError("SN9C20x exposure must be an integer 0..6016")
     return merged
 
 
@@ -226,6 +236,13 @@ class SN9C20xCapture:
         self.reg_w(0x1190, gamma_table(c["gamma"]))
         self.reg_w(0x118c, (c["red_balance"],))
         self.reg_w(0x118f, (c["blue_balance"],))
+        self._apply_exposure_gain()
+        flip = 0x01 | (0x20 if c["horizontal_flip"] else 0) | (0x10 if c["vertical_flip"] else 0)
+        self.reg_w(0x1182, (2 if c["vertical_flip"] else 3,))
+        self.i2c_w1(0x1e, flip)
+
+    def _apply_exposure_gain(self):
+        c = self.controls
         self.i2c_w((I2C_INTF | (2 << 4), I2C_ADDR, 0x00, OV_GAIN[c["gain"]], 0, 0, 0, 0x10))
         expo = c["exposure"]
         expo2 = min(expo, 547)
@@ -233,9 +250,13 @@ class SN9C20xCapture:
         self.i2c_w((I2C_INTF | (2 << 4), I2C_ADDR, 0x04, expo2 & 3, 0, 0, 0, 0x10))    # COM1
         rest = dummy_lines(c["frame_rate"], expo)                                  # ADVFL/H
         self.i2c_w((I2C_INTF | (3 << 4), I2C_ADDR, 0x2d, rest & 0xff, rest >> 8 & 0xff, 0, 0, 0x1e))
-        flip = 0x01 | (0x20 if c["horizontal_flip"] else 0) | (0x10 if c["vertical_flip"] else 0)
-        self.reg_w(0x1182, (2 if c["vertical_flip"] else 3,))
-        self.i2c_w1(0x1e, flip)
+
+    def set_controls(self, changes):
+        """Change exposure/gain while streaming (sensor I2C writes, no USB reopen)."""
+        if set(changes) - set(LIVE_RANGES):
+            raise ValueError("Only exposure and gain can change while streaming")
+        self.controls = validate_controls(dict(self.controls, **changes))
+        self._apply_exposure_gain()
 
     def _start(self):
         self.handle.setInterfaceAltSetting(INTERFACE, self.alt_setting)
@@ -429,7 +450,7 @@ class SN9C20xCapture:
 # bridge FIFO overflows and frames are lost. The child process below owns the USB
 # device and only assembles frames; it has its own interpreter and GIL.
 
-def _usb_process(controls, options, queue, stop):
+def _usb_process(controls, options, queue, stop, commands=None):
     import multiprocessing
     import queue as queue_module
     parent = multiprocessing.parent_process()
@@ -439,6 +460,12 @@ def _usb_process(controls, options, queue, stop):
         queue.put(("ready", None))
         dropped, last_stats = 0, 0.0
         while not stop.is_set() and (parent is None or parent.is_alive()):
+            while commands is not None:
+                try:
+                    changes = commands.get_nowait()
+                except queue_module.Empty:
+                    break
+                cap.set_controls(changes)       # I2C failure raises: reported, parent reconnects
             ok, raw = cap.read_raw(timeout=0.5)
             if ok:
                 try:
@@ -468,15 +495,16 @@ class SN9C20xProcessCapture:
     """Same interface as SN9C20xCapture, with USB handled in a child process."""
     def __init__(self, controls=None, timeout=3.0, start_timeout=20.0, **options):
         import multiprocessing
-        validate_controls(controls)              # fail fast in the caller
+        self.controls = validate_controls(controls)    # fail fast in the caller
         ctx = multiprocessing.get_context("spawn")
         self.timeout = timeout
         self.stats = collections.Counter()
         self.error = None
         self.queue = ctx.Queue(maxsize=3)
         self.stop = ctx.Event()
+        self.commands = ctx.Queue(maxsize=16)
         self.process = ctx.Process(target=_usb_process, name="sn9c20x-usb", daemon=True,
-                                   args=(dict(controls or {}), options, self.queue, self.stop))
+                                   args=(dict(controls or {}), options, self.queue, self.stop, self.commands))
         self.process.start()
         kind, value = self._get(start_timeout)
         if kind != "ready":
@@ -494,6 +522,13 @@ class SN9C20xProcessCapture:
 
     def isOpened(self):
         return self.error is None and self.process.is_alive()
+
+    def set_controls(self, changes):
+        """Validate here, apply in the USB child on its next loop (<= 0.5 s)."""
+        if set(changes) - set(LIVE_RANGES):
+            raise ValueError("Only exposure and gain can change while streaming")
+        self.controls = validate_controls(dict(self.controls, **changes))
+        self.commands.put_nowait(dict(changes))
 
     def read(self):
         deadline = time.monotonic() + self.timeout
@@ -517,5 +552,6 @@ class SN9C20xProcessCapture:
             self.process.terminate()             # OS closes the device handles
             self.process.join(2)
             self.stats["process_terminated"] += 1
-        self.queue.cancel_join_thread()
-        self.queue.close()
+        for q in (self.queue, self.commands):
+            q.cancel_join_thread()
+            q.close()

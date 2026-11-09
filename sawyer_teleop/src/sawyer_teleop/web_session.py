@@ -442,6 +442,28 @@ class WebSession:
             else:
                 self._save(motion_profile=profile, joint_protection_enabled=guard)
                 self.log('Motion option saved for the next connection: '+MOTION_PROFILES[profile][0])
+        elif action == 'camera_controls':
+            name, changes = options.get('name'), options.get('controls')
+            if not isinstance(name, str) or not isinstance(changes, dict):
+                raise SessionError('Invalid camera control request.')
+            state = self.operator.view() if self.operator else {}
+            if recording_busy(state):
+                # One episode keeps one set of imaging parameters (recorded in camera_config).
+                raise SessionError('Camera exposure and gain are locked while recording.')
+            try:
+                spec = self.cameras.set_controls(name, changes)
+            except KeyError:
+                raise SessionError('Unknown camera.')
+            # Persist what the camera now uses (a manual exposure also turns auto off).
+            applied = {key: spec[key]['value'] for key in changes if key != 'auto_exposure'}
+            if 'auto_exposure' in spec and ('auto_exposure' in changes or 'exposure' in changes):
+                applied['auto_exposure'] = spec['auto_exposure']
+            cameras = json.loads(json.dumps(self.config.get('cameras', [])))
+            for camera in cameras:
+                if camera.get('name') == name:
+                    camera['controls'] = dict(camera.get('controls') or {}, **applied)
+            self._save(cameras=cameras)
+            self.log('Camera %s: %s (saved)' % (name, ', '.join('%s=%s' % kv for kv in sorted(changes.items()))))
         elif action in ('calibrate', 'reset_arm', 'stop_reset', 'start_recording', 'save', 'discard', 'end_recording', 'stop_batch'):
             if self.operator is None or self.phase != 'connected':
                 raise SessionError('Connect B and Quest first.')

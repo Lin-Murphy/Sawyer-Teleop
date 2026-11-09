@@ -47,8 +47,8 @@
       "backend": "sn9c20x",
       "controls": {
         "gain_automatic": 0,
-        "exposure": 300,
-        "gain": 4,
+        "exposure": 100,
+        "gain": 3,
         "red_balance": 33,
         "blue_balance": 28,
         "brightness": 127,

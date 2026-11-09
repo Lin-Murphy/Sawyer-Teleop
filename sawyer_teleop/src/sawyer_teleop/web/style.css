@@ -914,6 +914,39 @@ dialog::backdrop {
 .camera figcaption .bad {
   color:var(--red)
 }
+.camera-controls {
+  display:grid;
+  gap:6px;
+  margin-top:8px;
+  padding-top:8px;
+  border-top:1px solid var(--line);
+  font-size:12px;
+  color:var(--muted)
+}
+.camera-controls[hidden] {
+  display:none
+}
+.camera-slider {
+  display:grid;
+  grid-template-columns:64px minmax(0,1fr) 64px;
+  align-items:center;
+  gap:10px
+}
+.camera-slider input {
+  width:100%;
+  accent-color:var(--blue)
+}
+.camera-slider input:disabled {
+  opacity:.45
+}
+.camera-slider output {
+  text-align:right;
+  color:var(--ink);
+  font-variant-numeric:tabular-nums
+}
+.camera-auto {
+  font-size:12px
+}
 @media (max-width:640px) {
   .camera-grid {
     grid-template-columns:1fr

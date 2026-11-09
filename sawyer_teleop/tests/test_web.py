@@ -255,3 +255,28 @@ def test_http_auth_origin_assets_and_live_snapshot(web):
             get('/../operator.json', auth=False)
     finally:
         server.shutdown();server.server_close();thread.join(3)
+
+
+def test_camera_sliders_apply_save_and_lock_while_recording(web):
+    s, _, _, root = web
+    spec = s.snapshot(OWNER)['cameras'][0]['controls']
+    assert spec['exposure']['min'] < spec['exposure']['max'] and 'auto_exposure' in spec
+    assert s.command(OWNER, 1, 'camera_controls', {'name': 'wrist', 'controls': {'exposure': -7, 'gain': 20}})['ok']
+    spec = s.snapshot(OWNER)['cameras'][0]['controls']
+    assert spec['exposure']['value'] == -7 and spec['gain']['value'] == 20 and spec['auto_exposure'] is False
+    saved = json.loads((root/'operator.json').read_text())
+    wrist = next(c for c in saved['cameras'] if c['name'] == 'wrist')
+    assert wrist['controls']['exposure'] == -7 and wrist['controls']['auto_exposure'] is False
+    assert not s.command(OWNER, 2, 'camera_controls', {'name': 'wrist', 'controls': {'exposure': 999}})['ok']
+    assert not s.command(OWNER, 3, 'camera_controls', {'name': 'nope', 'controls': {'gain': 1}})['ok']
+    assert not s.command(OWNER, 4, 'camera_controls', {'name': 'wrist', 'controls': {'hue': 1}})['ok']
+    with pytest.raises(SessionError):
+        s.command(OBSERVER, 5, 'camera_controls', {'name': 'wrist', 'controls': {'gain': 1}})
+    connect(s, 6); calibrate(s, 7)
+    s.command(OWNER, 8, 'start_recording', dict(name='lock', count=1, seconds=60, pause=.1, root=str(root/'data')))
+    until(s, lambda snap: snap['state'].get('recording'))
+    result = s.command(OWNER, 9, 'camera_controls', {'name': 'wrist', 'controls': {'gain': 1}})
+    assert not result['ok'] and 'locked while recording' in result['error']
+    s.command(OWNER, 10, 'end_recording', {})
+    until(s, lambda snap: snap['state'].get('recording_phase') in ('idle', 'complete'))
+    assert s.command(OWNER, 11, 'camera_controls', {'name': 'wrist', 'controls': {'gain': 1}})['ok']

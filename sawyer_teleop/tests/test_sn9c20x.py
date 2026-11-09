@@ -157,3 +157,62 @@ def test_process_capture_reports_child_errors_and_stats(monkeypatch):
     assert q.get(timeout=5) == ("error", "sn9c20x_not_found: test")
     with pytest.raises(ValueError):
         m.SN9C20xProcessCapture({"gain_automatic": 1})
+
+
+def test_color_correction_is_an_rgb_affine_with_saturation():
+    cam = Camera("wrist", color_correction={"matrix": [[2, 0, 0], [0, 1, 0], [0, 0, .5]],
+                                            "offset": [0, 10, 0], "source": "test"})
+    rgb = np.array([[[100, 100, 100], [200, 250, 40]]], dtype=np.uint8)
+    out = cam.correct(rgb)
+    assert out.dtype == np.uint8
+    np.testing.assert_array_equal(out, [[[200, 110, 50], [255, 255, 20]]])
+    assert Camera("wrist").correct(rgb) is rgb   # no correction: untouched
+    with pytest.raises(ValueError):
+        Camera("wrist", color_correction={"matrix": [[1, 0], [0, 1]]})
+
+
+def test_live_exposure_and_gain_write_sensor_registers_without_reopen():
+    cap = m.SN9C20xCapture.__new__(m.SN9C20xCapture)
+    cap.controls = m.validate_controls({"exposure": 300, "gain": 4, "frame_rate": 20})
+    writes = []
+    cap.i2c_w = writes.append
+    cap.set_controls({"exposure": 150, "gain": 0})
+    assert cap.controls["exposure"] == 150 and cap.controls["gain"] == 0
+    regs = {row[2]: row[3] for row in writes}
+    assert regs[0x00] == m.OV_GAIN[0] and regs[0x10] == 150 >> 2 and regs[0x04] == 150 & 3
+    with pytest.raises(ValueError):
+        cap.set_controls({"red_balance": 1})      # only exposure/gain are live
+    with pytest.raises(ValueError):
+        cap.set_controls({"gain": len(m.OV_GAIN)})
+
+
+def test_camera_queues_controls_for_the_capture_thread():
+    applied = []
+    class Cap:
+        def set_controls(self, changes):
+            applied.append(changes)
+    cam = Camera("wrist", backend="sn9c20x", controls={"exposure": 300, "gain": 4})
+    spec = cam.set_controls({"exposure": 120})
+    assert spec["exposure"]["value"] == 120 and "auto_exposure" not in spec
+    cam._apply_pending(Cap()); cam._apply_pending(Cap())
+    assert applied == [{"exposure": 120}]           # applied once, on the open device
+    for bad in ({"exposure": 0}, {"gain": 1.5}, {"auto_exposure": True}, {}):
+        with pytest.raises(ValueError):
+            cam.set_controls(bad)
+
+
+def test_opencv_camera_controls_and_auto_exposure():
+    calls = []
+    class Cap:
+        def set(self, prop, value):
+            calls.append((prop, value))
+    cam = Camera("realsense", device=0, backend="dshow")
+    assert cam.control_spec()["auto_exposure"] is True    # nothing configured: device auto
+    cam.set_controls({"exposure": -6})
+    cam._apply_pending(Cap())
+    assert (m.cv2.CAP_PROP_AUTO_EXPOSURE, 0.25) in calls and (m.cv2.CAP_PROP_EXPOSURE, -6) in calls
+    calls.clear()
+    cam.set_controls({"auto_exposure": True})
+    cam._apply_pending(Cap())
+    assert calls == [(m.cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)]
+    assert Camera("rs", backend="dshow", control_ranges={"gain": [0, 64]}).control_spec()["gain"]["max"] == 64

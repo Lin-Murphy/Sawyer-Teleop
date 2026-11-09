@@ -107,9 +107,31 @@ def exposure_metrics(rgb):
                 bright_pct=bright, channel_clip_pct=clip, rgb_mean=[r, g, b], state=state)
 
 
+def color_transform(correction):
+    """Validate ``{"matrix": 3x3, "offset": [3]}`` (RGB in, RGB out, 0-255 units).
+
+    Returns a float32 3x4 affine for cv2.transform, or None when no correction is set.
+    Extra keys (e.g. "source", "fitted") are provenance and are kept in metadata only.
+    """
+    if not correction:
+        return None
+    matrix = np.asarray(correction.get("matrix"), dtype=np.float64)
+    offset = np.asarray(correction.get("offset", [0., 0., 0.]), dtype=np.float64)
+    if matrix.shape != (3, 3) or offset.shape != (3,) or not (np.isfinite(matrix).all() and np.isfinite(offset).all()):
+        raise ValueError("color_correction needs a finite 3x3 'matrix' and 3-value 'offset'")
+    return np.hstack([matrix, offset[:, None]]).astype(np.float32)
+
+
+# OpenCV (DirectShow) live controls: exposure is DirectShow's log2-seconds integer
+# (-6 = 1/64 s); gain is the device's VideoProcAmp gain. A config "control_ranges"
+# entry overrides these per camera.
+OPENCV_RANGES = {"exposure": (-13, -5), "gain": (0, 128)}   # measured on the D435 RGB; -4 (1/16 s) exceeds a 30 Hz frame
+
+
 class Camera:
     def __init__(self, name="front", device=0, width=640, height=480, fps=30, backend="auto",
-                 label=None, reconnect=False, controls=None, source_fps=None):
+                 label=None, reconnect=False, controls=None, source_fps=None, color_correction=None,
+                 control_ranges=None):
         if not name.isidentifier():
             raise ValueError("camera name must be a Python identifier")
         self.name, self.device, self.label = name, device, label or name
@@ -118,6 +140,11 @@ class Camera:
         # (e.g. a D435 RGB has no 20 Hz mode, so it runs at 30 and keeps 2 of 3).
         self.source_fps = source_fps or fps
         self.controls = dict(controls or {})   # sn9c20x backend: V4L2-named imaging controls
+        # Optional host-side RGB affine applied to every frame before preview and recording.
+        self.color_correction = dict(color_correction) if color_correction else None
+        self._color = color_transform(self.color_correction)
+        self.control_ranges = self._ranges(control_ranges)
+        self._pending_controls = {}   # applied by the capture thread to the open device
         self.reconnect = reconnect
         self.lock = threading.Lock()
         self.frames = collections.deque(maxlen=4)
@@ -130,6 +157,76 @@ class Camera:
         self.driver_stats = None   # counters from user-space drivers (sn9c20x)
         self.thread = None
         self.sink = None
+
+    def _ranges(self, overrides):
+        if self.backend == "sn9c20x":
+            from .sn9c20x import LIVE_RANGES
+            ranges = dict(LIVE_RANGES)
+        else:
+            ranges = dict(OPENCV_RANGES)
+        for key, value in (overrides or {}).items():
+            if key not in ranges or len(value) != 2 or not value[0] < value[1]:
+                raise ValueError("Invalid control range for %s.%s" % (self.name, key))
+            ranges[key] = (int(value[0]), int(value[1]))
+        return ranges
+
+    def control_spec(self):
+        """Live exposure/gain sliders for the Web page (None for synthetic cameras)."""
+        with self.lock:
+            controls = dict(self.controls)
+        spec = {key: dict(min=low, max=high, step=1, value=controls.get(key))
+                for key, (low, high) in self.control_ranges.items()}
+        if self.backend != "sn9c20x":
+            spec["auto_exposure"] = bool(controls.get("auto_exposure", "exposure" not in controls))
+        return spec
+
+    def set_controls(self, changes):
+        """Validate and queue exposure/gain (and OpenCV auto exposure) for the device."""
+        if not isinstance(changes, dict) or not changes:
+            raise ValueError("No camera control given")
+        allowed = set(self.control_ranges) | ({"auto_exposure"} if self.backend != "sn9c20x" else set())
+        if set(changes) - allowed:
+            raise ValueError("Unsupported control for %s: %s" % (self.name, ", ".join(sorted(set(changes) - allowed))))
+        for key, value in changes.items():
+            if key == "auto_exposure":
+                if type(value) is not bool:
+                    raise ValueError("auto_exposure must be true or false")
+                continue
+            low, high = self.control_ranges[key]
+            if type(value) is not int or not low <= value <= high:
+                raise ValueError("%s %s must be an integer %d..%d" % (self.name, key, low, high))
+        with self.lock:
+            self.controls.update(changes)
+            if "exposure" in changes and self.backend != "sn9c20x" and "auto_exposure" not in changes:
+                self.controls["auto_exposure"] = False   # a manual exposure value turns auto off
+                changes = dict(changes, auto_exposure=False)
+            self._pending_controls.update(changes)
+        return self.control_spec()
+
+    @staticmethod
+    def _apply_opencv(cap, controls):
+        # DirectShow: auto exposure is a flag on CameraControl_Exposure. Setting an
+        # exposure value switches it to manual; 0.75 / 0.25 select auto / manual.
+        if controls.get("auto_exposure") is True:
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
+        elif controls.get("auto_exposure") is False:
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+        if "exposure" in controls and controls.get("auto_exposure") is not True:
+            cap.set(cv2.CAP_PROP_EXPOSURE, controls["exposure"])
+        if "gain" in controls:
+            cap.set(cv2.CAP_PROP_GAIN, controls["gain"])
+
+    def _apply_pending(self, cap):
+        with self.lock:
+            pending, self._pending_controls = self._pending_controls, {}
+            if pending and self.backend != "sn9c20x" and "exposure" in pending and "auto_exposure" not in pending:
+                pending["auto_exposure"] = self.controls.get("auto_exposure", False)
+        if not pending:
+            return
+        if self.backend == "sn9c20x":
+            cap.set_controls(pending)
+        else:
+            self._apply_opencv(cap, pending)
 
     def start(self):
         self.thread = threading.Thread(target=self._run, name="camera-"+self.name, daemon=True)
@@ -165,6 +262,11 @@ class Camera:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             cap.set(cv2.CAP_PROP_FPS, self.source_fps)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            with self.lock:
+                saved = {k: v for k, v in self.controls.items() if k in ("auto_exposure", "exposure", "gain")}
+                self._pending_controls = {}
+            if saved:
+                self._apply_opencv(cap, saved)
         return cap
 
     def _capture(self):
@@ -177,6 +279,7 @@ class Camera:
             window_start, window_seq = time.monotonic(), self.seq
             pacer = FramePacer(self.fps)
             while not self.stop.is_set():
+                self._apply_pending(cap)
                 start = ns()
                 ok, bgr = cap.read()
                 end = ns()
@@ -189,7 +292,7 @@ class Camera:
                     continue
                 frame = {"seq": self.seq, "ns": end, "read_start_ns": start,
                          "source_seq": self.source_seq, "open_count": self.open_count,
-                         "rgb": cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)}
+                         "rgb": self.correct(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))}
                 self.seq += 1
                 self.error = None
                 elapsed = time.monotonic() - window_start
@@ -203,6 +306,10 @@ class Camera:
                     sink(self.name, frame)
         finally:
             cap.release()
+
+    def correct(self, rgb):
+        """Apply the configured colour correction; uint8 output saturates at 0/255."""
+        return rgb if self._color is None else cv2.transform(rgb, self._color)
 
     def latest(self, max_age=.25):
         with self.lock:
@@ -295,8 +402,15 @@ class CameraHub:
             result.append(dict(name=c.name, label=c.label, live=live, age_ms=age, error=error,
                                fps=c.measured_fps if live else None, width=c.width, height=c.height,
                                target_fps=c.fps, exposure=exposure,
+                               controls=c.control_spec() if hasattr(c, "control_spec") else None,
                                diagnostics=dict(c.driver_stats) if c.driver_stats is not None else None))
         return result
+
+    def set_controls(self, name, changes):
+        camera = next((c for c in self.cameras if c.name == name), None)
+        if camera is None:
+            raise KeyError(name)
+        return camera.set_controls(changes)
 
     def jpeg(self, name, quality=80):
         camera = next((c for c in self.cameras if c.name == name), None)
