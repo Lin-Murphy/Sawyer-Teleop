@@ -8,6 +8,12 @@
 
 ## 当前决定
 
+### "Reset arm between episodes" 网页默认勾选（2026-11-09）
+
+**仅更新并重启 A。** 用户要求该复选框默认勾选：`web/index.html` 的 `resetBetween` 加 `checked`，USAGE 同步。
+后端 `reset_between` 缺省仍为 False（接口不传即不复位），录制逻辑不变。注意：勾选时若 B 不提供 Reset 姿态会拒绝开始录制，
+当前 ROG 上 B 即提示 "Update B to provide its official neutral pose."，需先换成当前源码的 B 或手动取消勾选。未跑测试，未在浏览器确认。
+
 ### 重复运行 Start-A 自动重启旧实例（2026-11-09，仅软件验证）
 
 **仅更新 A；本次需最后一次手动在旧 Start-A 窗口 Ctrl+C（旧代码没有停止接口），之后即可直接双击重启。** 用户要求打开 Start-A 时若已在运行则自动重启。
