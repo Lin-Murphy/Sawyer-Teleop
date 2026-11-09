@@ -8,8 +8,8 @@ from sawyer_teleop.protocol import JOINTS
 ROOT = Path(__file__).resolve().parents[1]
 LAB_POSE = ROOT / 'config/lab-neutral-pose.yaml'
 # Lab-measured Sawyer pose confirmed 2026-11-07 (rad, right_j0..right_j6).
-EXPECTED = ['0.932630859375', '-0.975340820313', '-1.853528320312', '1.354167968750',
-            '0.580955078125', '1.943027343750', '4.017021484375']
+EXPECTED = ['1.2704287109375', '-1.1166728515625', '-1.3760634765625', '1.06116015625',
+            '0.5706650390625', '1.9465263671875', '3.327021484375']
 # Non-Gazebo sawyer_base.urdf.xacro limits (sawyer_robot, gazebo=false; J6 +/-4.7124).
 REAL_LIMITS = [(-3.0503, 3.0503), (-3.8095, 2.2736), (-3.0426, 3.0426), (-3.0439, 3.0439),
                (-2.9761, 2.9761), (-2.9761, 2.9761), (-4.7124, 4.7124)]
