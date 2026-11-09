@@ -98,14 +98,19 @@ class Connection:
                     break
                 if partial_since and time.monotonic()-partial_since > .5:
                     raise ProtocolError("partial_frame_timeout")
-                for msg in decoder.feed(data):
+                messages = decoder.feed(data)
+                for msg in messages:
                     self.on_message(msg)
-                if decoder.buffer:
-                    partial_since = partial_since or time.monotonic()
-                else:
+                # Time only the frame still pending. A busy stream whose reads
+                # keep ending mid-frame is still completing frames, not stalled.
+                if not decoder.buffer:
                     partial_since = None
+                elif messages or partial_since is None:
+                    partial_since = time.monotonic()
         except Exception as exc:
-            self.error = "receive_failed:" + str(exc)
+            # Closing the socket wakes recv with an error; keep the original cause.
+            if not self.closed.is_set():
+                self.error = "receive_failed:" + str(exc)
         finally:
             self.close(self.error or "peer_closed")
 

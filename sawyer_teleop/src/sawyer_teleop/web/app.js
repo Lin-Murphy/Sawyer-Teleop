@@ -4,7 +4,7 @@ const client=crypto.randomUUID(), storageKey='sawyer-web-token:'+location.port;
 let token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem(storageKey)||'';
 if(token){sessionStorage.setItem(storageKey,token);history.replaceState(null,'',location.pathname);}
 let sequence=0,last=null,lastOK=0,initialized=false,events=[],eventSeq=0,busy=0,lastBatch='',lastProfileRequest=null;
-let frozen=false,networkOK=false;
+let frozen=false,networkOK=false,wirelessSeq=0,wirelessSeen=0;
 function notice(message){text('notice',message||'');$('notice').hidden=!message;}
 async function api(path,body,timeout=2500){
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
@@ -32,14 +32,17 @@ function render(){
   const connected=last.phase==='connected'&&s.robot_connected&&localFresh,transition=['connecting','disconnecting'].includes(last.phase),idle=last.phase==='disconnected'||(last.phase==='error'&&!last.has_session);
   const phase=s.recording_phase||'idle',recordBusy=s.auto_recording||['recording','review','finishing','countdown'].includes(phase),recordIdle=['idle','complete'].includes(phase),requestBusy=busy>0;
   text('ownerLabel',!localFresh?'Local service unavailable':own?'You have the controls':last.occupied?'Read-only · another page has the controls':'Read-only · controls available');$('claim').hidden=own||!localFresh;$('claim').disabled=last.occupied;
-  text('connectionBadge',!localFresh?'Local service disconnected':transition?last.phase==='connecting'?'Connecting…':'Disconnecting…':connected?'B connected':last.phase==='error'?'Session error':'B disconnected');$('connectionBadge').dataset.status=!localFresh?'error':last.phase;
+  text('connectionBadge',!localFresh?'Local service disconnected':transition?last.phase==='connecting'?'Connecting…':'Disconnecting…':connected?'B connected':last.phase==='error'?'Session error':last.phase==='connected'?'B disconnected: '+(s.robot_disconnect_reason||'unknown'):'B disconnected');$('connectionBadge').dataset.status=!localFresh||(last.phase==='connected'&&!connected)?'error':last.phase;
   text('summary',localFresh?last.message:'Connection to the local service was interrupted. Control will not resume automatically.');
-  text('usb','Quest USB: '+(last.usb||'Unknown'));
+  text('usb','Quest'+(last.quest_link?' ('+last.quest_link+')':'')+': '+(last.usb||'Unknown'));
   $('connect').textContent=transition?last.phase==='connecting'?'Connecting…':'Disconnecting…':idle?'Connect':'Disconnect';$('connect').disabled=!own||transition||requestBusy||(!idle&&recordBusy);
   $('stopSession').disabled=!own||idle||last.phase==='disconnecting';
   document.querySelectorAll('[data-connection]').forEach(e=>e.disabled=!own||!idle||requestBusy);
   $('smoothingMs').disabled=$('smoothingMs').disabled||!$('smoothing').checked;
-  $('scan').disabled=!own||last.scanning||!idle||requestBusy;$('scan').textContent=last.scanning?'Finding…':'Find';
+  const wireless=last.wireless||{};
+  $('scan').disabled=!own||last.scanning||wireless.running||!idle||requestBusy;$('scan').textContent=last.scanning?'Finding…':'Find';
+  $('wireless').disabled=!own||last.scanning||wireless.running||!idle||requestBusy;$('wireless').textContent=wireless.running?'Switching…':'Wireless';
+  if(wireless.seq&&wireless.seq!==wirelessSeq){wirelessSeq=wireless.seq;if(wirelessSeq>wirelessSeen&&wireless.serial)$('serial').value=wireless.serial;}
   optionsList('hostHistory',last.defaults.history||[]);optionsList('deviceList',last.devices||[]);
   const readyMotion=idle||(connected&&s.mode==='paused'&&!s.following&&!s.resetting&&!recordBusy&&!s.native_stopping&&!s.native_stop_failed);
   $('profile').disabled=$('protection').disabled=!own||!readyMotion||transition||requestBusy||last.pending_profile!=null;
@@ -173,7 +176,7 @@ function renderLogs(){if($('pauseLog').checked)return;const area=$('logs'),posit
 async function poll(){
   if(frozen)return;
   try{const data=await api('/api/state?after='+eventSeq+'&view=0');networkOK=true;lastOK=performance.now();last=data;
-    if(!initialized){for(const p of data.profiles)$('profile').add(new Option(p.label,p.value));fillDefaults(data.defaults);initialized=true;if(!data.occupied)await claim();}
+    if(!initialized){for(const p of data.profiles)$('profile').add(new Option(p.label,p.value));fillDefaults(data.defaults);wirelessSeen=data.wireless?.seq||0;initialized=true;if(!data.occupied)await claim();}
     if(lastProfileRequest!=null&&data.pending_profile==null){const result=data.state.motion_profile_result;if(result){$('profile').value=result.profile;$('protection').checked=result.joint_protection??data.state.joint_protection?.enabled??true;}}
     lastProfileRequest=data.pending_profile;
     if(data.events.length){events.push(...data.events);events=events.slice(-600);eventSeq=data.event_seq;renderLogs();}
@@ -185,6 +188,7 @@ $('claim').onclick=claim;
 $('connect').onclick=()=>command(last.phase==='disconnected'||last.phase==='error'&&!last.has_session?'connect':'disconnect',settings());
 $('stopSession').onclick=()=>command('stop_session');
 $('scan').onclick=()=>command('scan',{serial:$('serial').value});
+$('wireless').onclick=()=>command('wireless',{serial:$('serial').value});
 $('apply').onclick=()=>command('apply_motion',{profile:$('profile').value,joint_protection:$('protection').checked,backend:$('backend').value});
 $('calibrate').onclick=()=>command('calibrate');$('resetArm').onclick=()=>command(last.state.resetting?'stop_reset':'reset_arm');
 $('recordToggle').onclick=()=>{const s=last.state,action=s.recording_phase==='recording'?'end_recording':s.auto_recording?'stop_batch':'start_recording';if(action==='start_recording'&&![...document.querySelectorAll('#recordFields input')].every(e=>e.reportValidity()))return;command(action,action==='start_recording'?recordOptions():{});};

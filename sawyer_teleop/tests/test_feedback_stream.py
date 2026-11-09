@@ -14,6 +14,7 @@ from sawyer_teleop.protocol import MAX_FRAME, encode
 from sawyer_teleop.recording import (CAMERA_LOST_S, Episode, camera_quality, latest_index,
                                      stream_quality)
 from sawyer_teleop.server import BridgeServer
+from sawyer_teleop.episode_store import open_episode
 
 
 def test_stream_overflow_is_counted_and_visible_as_sequence_gap():
@@ -155,9 +156,9 @@ def test_episode_writes_stream_alignment_quality_and_gap_event(tmp_path):
     episode.sealed_ns = start+750_000_000  # deterministic recording window
     assert episode.finish(True, {"capture_closed": True}).wait(5)
     assert episode.error is None
-    with h5py.File(episode.result/"raw.hdf5", "r") as data:
+    with open_episode(episode.result) as data:
         metadata = json.loads(data.attrs["metadata"])
-        assert metadata["schema_version"] == 2 and metadata["initial_state"] == {"q": [0.]*7}
+        assert metadata["schema_version"] == 3 and metadata["initial_state"] == {"q": [0.]*7}
         joint, pose = data["feedback/joint"], data["feedback/pose"]
         assert len(joint["q"]) == 40 and not joint["head_pan_valid"][:].any()
         np.testing.assert_array_equal(joint["ns"][:], [start+i*10_000_000+100 for i in range(1, 41)])
@@ -188,7 +189,7 @@ def test_demo_records_raw_schema_two(tmp_path):
     run_demo(tmp_path, seconds=.6)
     episodes = sorted((tmp_path/"demo").glob("episode_*"))
     assert episodes
-    with h5py.File(episodes[0]/"raw.hdf5", "r") as data:
+    with open_episode(episodes[0]) as data:
         metadata = json.loads(data.attrs["metadata"])
         initial = metadata["initial_state"]
         assert len(initial["q"]) == 7 and len(initial["eef_pos"]) == 3 and len(initial["eef_quat"]) == 4

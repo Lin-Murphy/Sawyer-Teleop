@@ -36,6 +36,8 @@ class Operator:
         self.robot, self.quest, self.cameras = robot, quest, cameras
         # Names that must be live before a recording may start (real-arm collection).
         self.required_cameras = list(required_cameras or [])
+        # MP4 previews are encoded after save in a separate process (raw frames stay lossless).
+        self.record_videos = True
         self.output = Path(output)
         self.hz, self.scale = hz, position_scale
         self.ik_period_ns = int(np.ceil(1e9/hz))
@@ -178,7 +180,8 @@ class Operator:
                 except Exception:
                     pass
             result.update(feedback_diagnostics=timing, robot_connected=timing["connected"],
-                          feedback_valid=timing["fresh"], feedback_age_ms=timing["age_ms"])
+                          feedback_valid=timing["fresh"], feedback_age_ms=timing["age_ms"],
+                          robot_disconnect_reason=timing.get("disconnect_reason"))
             if not timing["fresh"]:
                 result.update(joints=None, reset_available=False)
         return result
@@ -405,7 +408,8 @@ class Operator:
                                 if hasattr(self.robot, "feedback_stream_status")
                                 else {"enabled": False, "reason": "client_lacks_feedback_stream"}),
             "camera_config": [self._camera_config(c) for c in self.cameras],
-        }, [c.name for c in self.cameras], fps={c.name:c.fps for c in self.cameras})
+        }, [c.name for c in self.cameras], fps={c.name:c.fps for c in self.cameras},
+            videos=self.record_videos)
         for camera in self.cameras:
             camera.set_sink(self.episode.frame)
         self.auto_recording = True

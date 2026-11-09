@@ -6,6 +6,7 @@ from pathlib import Path
 import secrets
 import tempfile
 from urllib.parse import urlsplit, parse_qs
+from urllib.error import HTTPError
 from urllib.request import Request, ProxyHandler, HTTPRedirectHandler, build_opener
 
 
@@ -38,8 +39,8 @@ def publish_instance(config_path, server):
             temporary.unlink()
 
 
-def existing_url(config_path):
-    """Only reopen a loopback URL after authenticated instance verification."""
+def _verified(config_path):
+    """(record, token, netloc) of a live, authenticated local instance, else None."""
     try:
         path = instance_file(config_path)
         if path.stat().st_size > 8192:
@@ -60,10 +61,38 @@ def existing_url(config_path):
             live = json.loads(response.read(8192))
         if (isinstance(live, dict) and live.get('service') == 'sawyer-web' and live.get('instance') == record.get('instance')
                 and live.get('config') == config_key(config_path)):
-            return record['url']
+            return record, token, url.netloc
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return None
+
+
+def existing_url(config_path):
+    """Only reopen a loopback URL after authenticated instance verification."""
+    found = _verified(config_path)
+    return found[0]['url'] if found else None
+
+
+def request_shutdown(config_path):
+    """Ask a verified running instance to stop. Returns (accepted, message)."""
+    found = _verified(config_path)
+    if not found:
+        return False, None
+    record, token, netloc = found
+    request = Request('http://'+netloc+'/api/shutdown', data=b'{}', method='POST', headers={
+        'Content-Type': 'application/json', 'X-Sawyer-Token': token,
+        'X-Sawyer-Client': 'launcher-'+secrets.token_hex(12)})
+    try:
+        with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=3) as response:
+            reply = json.loads(response.read(8192))
+        return bool(reply.get('ok')), reply.get('error')
+    except HTTPError as exc:
+        try:
+            return False, json.loads(exc.read(8192)).get('error')
+        except ValueError:
+            return False, str(exc)
+    except (OSError, ValueError) as exc:
+        return False, str(exc)
 
 
 def remove_instance(config_path, instance_id):

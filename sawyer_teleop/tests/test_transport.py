@@ -77,6 +77,26 @@ def test_slow_partial_frame_does_not_occupy_connection_forever():
         left.close()
 
 
+def test_busy_stream_ending_reads_mid_frame_is_not_a_partial_timeout():
+    """Every read ends inside a frame for over 0.5 s, yet frames keep completing."""
+    left, right = tcp_pair()
+    received = []
+    connection = Connection(right, received.append).start()
+    try:
+        frame = encode({"type": "state", "pad": "x" * 300})
+        wire = frame * 200
+        step = len(frame) + len(frame) // 2 + 7   # rarely aligned to a frame boundary
+        for offset in range(0, len(wire), step):
+            left.sendall(wire[offset:offset+step])
+            time.sleep(.01)
+        time.sleep(.1)
+        assert not connection.closed.is_set(), connection.error
+        assert len(received) == 200
+    finally:
+        connection.close()
+        left.close()
+
+
 class WriteSink:
     """A deterministic wire that can replenish backlog while each send completes."""
     def setsockopt(self, *args): pass

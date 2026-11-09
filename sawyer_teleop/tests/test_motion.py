@@ -14,6 +14,7 @@ from sawyer_teleop.motion import PoseSmoother
 from sawyer_teleop.motion_report import analyze_motion
 from sawyer_teleop.operator import Operator
 from sawyer_teleop.server import BridgeServer
+from sawyer_teleop.episode_store import open_episode
 
 
 ORIGIN = {"p": [0., 0., 0.], "q": [0., 0., 0., 1.]}
@@ -123,7 +124,7 @@ def test_smoothed_capture_keeps_raw_input_and_actual_submitted_actions(smooth_li
     assert any(e["quest"]["hands"]["r"]["pose"]["p"][0] == .123456789123 for e in submitted)
     assert any(np.linalg.norm(np.asarray(e["raw_target_pose"]["p"])-e["target_pose"]["p"]) > .001
                for e in submitted)
-    with h5py.File(episode.result/"raw.hdf5") as data:
+    with open_episode(episode.result) as data:
         assert json.loads(data.attrs["metadata"])["motion"]["enabled"]
         # The Cartesian IK goal is not the intermediate command actually submitted.
         targets = {e["command_seq"]: e["submitted_q"] for e in submitted}

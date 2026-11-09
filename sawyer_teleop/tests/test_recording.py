@@ -1,10 +1,13 @@
+from pathlib import Path
 import json
 import time
 import h5py
 import numpy as np
 import pytest
 from sawyer_teleop.dataset import causal_indices
+from sawyer_teleop import recording
 from sawyer_teleop.recording import Episode
+from sawyer_teleop.episode_store import open_episode
 
 
 def test_discard_removes_every_episode_file(tmp_path):
@@ -20,7 +23,7 @@ def test_discard_removes_every_episode_file(tmp_path):
 def test_saved_incomplete_episode_marked(tmp_path):
     episode = Episode(tmp_path, {})
     episode.finish(True, {"holding": False}).wait(5)
-    with h5py.File(episode.result/"raw.hdf5") as file:
+    with open_episode(episode.result) as file:
         assert not file.attrs["complete"]
 
 
@@ -37,7 +40,7 @@ def test_operator_save_labels_task_success(tmp_path, stop, expected):
     assert episode.finish(True, stop).wait(5)
     manifest = json.loads((episode.result/"manifest.json").read_text(encoding="utf-8"))
     assert manifest["task_success"] is expected
-    with h5py.File(episode.result/"raw.hdf5") as data:
+    with open_episode(episode.result) as data:
         assert json.loads(data.attrs["metadata"])["task_success"] is expected
 
 
@@ -50,7 +53,7 @@ def test_no_future_observations():
 def test_writer_failure_can_still_discard(tmp_path, monkeypatch):
     def fail(*args, **kwargs):
         raise OSError("disk_full")
-    monkeypatch.setattr(h5py, "File", fail)
+    monkeypatch.setattr(recording, "open_file", fail)
     episode = Episode(tmp_path, {})
     time.sleep(.1)
     assert episode.error == "disk_full"
@@ -73,7 +76,7 @@ def test_queue_overflow_is_explicit_and_excludes_training(tmp_path, monkeypatch)
     episode.finish(True, {"holding": True})
     gate.set()
     assert episode.done.wait(5)
-    with h5py.File(episode.result/"raw.hdf5") as file:
+    with open_episode(episode.result) as file:
         assert not file.attrs["complete"]
 
 
@@ -101,11 +104,14 @@ def test_queued_images_have_a_byte_limit(tmp_path, monkeypatch):
         episode.finish(True, {"capture_closed": True})
         gate.set()
         assert episode.done.wait(5)
-    with h5py.File(episode.result/"raw.hdf5") as data:
+    with open_episode(episode.result) as data:
         assert not data.attrs["complete"]
         assert data["frames/front/seq"][:].tolist() == [1, 2]
         assert data["frames/front/rgb"].shape == (2, 48, 64, 3)
-        assert data["frames/front/rgb"].chunks == (1, 48, 64, 3)
+    # Raw frames are appended back to back; the overflow is recorded for diagnosis.
+    assert (episode.result/"cameras/front/frames.rgb").stat().st_size == 2*rgb.nbytes
+    manifest = json.loads((episode.result/"manifest.json").read_text(encoding="utf-8"))
+    assert manifest["writer_stats"]["queue_full"]["kind"] == "frame"
 
 
 def test_saved_telemetry_preserves_all_rows_precision_and_partial_tail(tmp_path):
@@ -137,7 +143,7 @@ def test_saved_telemetry_preserves_all_rows_precision_and_partial_tail(tmp_path)
         expected.append((stamp, seq, q, ticks))
     assert episode.finish(True, {"capture_closed": True}).wait(5)
     assert episode.error is None
-    with h5py.File(episode.result/"raw.hdf5", "r") as data:
+    with open_episode(episode.result) as data:
         assert data.attrs["complete"]
         assert all(len(ds) == 75 for name in ("states", "commands") for ds in data[name].values())
         assert data["states/ns"].dtype == np.int64
@@ -172,7 +178,7 @@ def test_dynamixel_ticks_are_recorded_without_claiming_metric_finger_distance(tm
                                           "target_ticks": 1024, "age_ms": 12.5}}})
     assert episode.finish(True).wait(5)
     assert episode.error is None
-    with h5py.File(episode.result/"raw.hdf5") as data:
+    with open_episode(episode.result) as data:
         assert data['states/gripper_position_ticks'][0] == -23
         assert data['states/gripper_ticks_valid'][0]
         assert data['states/gripper_target_ticks'][0] == 1024
@@ -183,15 +189,26 @@ def test_dynamixel_ticks_are_recorded_without_claiming_metric_finger_distance(tm
 
 
 def test_telemetry_write_failure_never_marks_saved_capture_complete(tmp_path, monkeypatch):
-    def fail(*args, **kwargs):
-        raise OSError("disk_full_during_rows")
-    monkeypatch.setattr(h5py.Dataset, "resize", fail)
+    original = recording.open_file
+
+    class FailingWrites:
+        def __init__(self, handle):
+            self.handle = handle
+        def write(self, data):
+            raise OSError("disk_full_during_rows")
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+
+    def failing(path, mode):
+        handle = original(path, mode)
+        return FailingWrites(handle) if Path(path).name == "commands.jsonl" else handle
+    monkeypatch.setattr(recording, "open_file", failing)
     episode = Episode(tmp_path, {})
     episode.command({"b_ns": 123, "q": [0.]*7, "seq": 1, "feedback_seq": 1,
                      "generation": 1}, 1, 0, 0)
     assert episode.finish(True, {"capture_closed": True}).wait(5)
     assert episode.error == "disk_full_during_rows"
-    with h5py.File(episode.result/"raw.hdf5", "r") as data:
+    with open_episode(episode.result) as data:
         assert not data.attrs["complete"]
     manifest = json.loads((episode.result/"manifest.json").read_text(encoding="utf-8"))
     assert manifest["recording_error"] == episode.error
@@ -203,7 +220,7 @@ def test_end_to_end_export_and_resume(tmp_path):
     assert result["episodes"] == 2 and result["discarded_pending_dirs"] == 0
     assert len(list((tmp_path/"demo").glob("episode_*"))) == 2
     for episode in (tmp_path/"demo").glob("episode_*"):
-        with h5py.File(episode/"raw.hdf5") as raw:
+        with open_episode(episode) as raw:
             assert len(raw["commands/gripper"]) == len(raw["commands/q"])
             assert np.all(raw["commands/gripper"][:] == -1)
             assert np.all(raw["commands/gripper_valid"][:])
@@ -227,7 +244,7 @@ def test_end_to_end_export_and_resume(tmp_path):
 
 @pytest.mark.parametrize('save', [True, False], ids=['retain', 'discard'])
 def test_close_failure_finishes_and_never_promotes_capture(tmp_path, monkeypatch, save):
-    original = h5py.File
+    original = recording.open_file
     class CloseFailure:
         def __init__(self, *args, **kwargs):
             self.file = original(*args, **kwargs)
@@ -236,7 +253,7 @@ def test_close_failure_finishes_and_never_promotes_capture(tmp_path, monkeypatch
         def close(self):
             self.file.close()
             raise OSError('close_failed')
-    monkeypatch.setattr(h5py, 'File', CloseFailure)
+    monkeypatch.setattr(recording, 'open_file', CloseFailure)
     episode = Episode(tmp_path, {})
     assert episode.finish(save, {'capture_closed': True}).wait(1)
     assert 'close_failed' in episode.error
@@ -246,3 +263,23 @@ def test_close_failure_finishes_and_never_promotes_capture(tmp_path, monkeypatch
         assert 'close_failed' in json.loads((episode.path/'manifest.json').read_text())['recording_error']
     else:
         assert episode.result == 'discarded' and not list(tmp_path.iterdir())
+
+
+def test_folder_episode_has_no_hdf5_and_videos_are_made_after_save(tmp_path):
+    import cv2
+    episode = Episode(tmp_path, {"camera_config": [{"name": "front", "fps": 20}]}, ["front"],
+                      fps={"front": 20}, videos=True)
+    for seq in range(5):
+        episode.frame("front", {"ns": 1000+seq*50_000_000, "read_start_ns": 0, "seq": seq,
+                                "rgb": np.full((48, 64, 3), seq*40, dtype=np.uint8)})
+    assert episode.finish(True, {"capture_closed": True}).wait(5)
+    assert not list(episode.result.rglob("*.hdf5"))
+    episode.video_process.join(60)
+    assert episode.video_process.exitcode == 0
+    assert json.loads((episode.result/"videos.json").read_text())["front"] == {"ok": True, "frames": 5}
+    capture = cv2.VideoCapture(str(episode.result/"cameras/front/video.mp4"))
+    assert int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) == 5
+    capture.release()
+    with open_episode(episode.result) as data:
+        assert data.attrs["complete"]
+        assert data["frames/front/rgb"][3].max() == 120  # raw frames are lossless

@@ -52,6 +52,7 @@ class RobotClient:
         self.uncertainty_ns = None
         self.sync_ns = 0
         self.rtt_ms = None
+        self.ping_timeouts = 0
         self.stop = threading.Event()
         self.session = None
         self.generation = None
@@ -197,7 +198,7 @@ class RobotClient:
             return rows, {"dropped_b": self.stream_dropped_b, "dropped_a": self.stream_dropped_a,
                           "status": dict(self.feedback_stream_status)}
 
-    def request(self, kind, timeout=.3, **kwargs):
+    def request(self, kind, timeout=.3, close_on_timeout=True, **kwargs):
         with self.lock:
             self.ident += 1
             ident = self.ident
@@ -207,7 +208,9 @@ class RobotClient:
             self.connection.send(dict(kwargs, type=kind, id=ident, session=self.session),
                                  clear_latest=kind in ("hold", "arm"))
             if not entry["event"].wait(timeout):
-                self.connection.close("request_timeout:" + kind)
+                # A late reply to an abandoned id is ignored by _receive.
+                if close_on_timeout:
+                    self.connection.close("request_timeout:" + kind)
                 raise TimeoutError(kind + "_timeout")
             response = entry.get("reply")
             if not response:
@@ -219,13 +222,22 @@ class RobotClient:
             with self.lock:
                 self.waiting.pop(ident, None)
 
-    def sync_clock(self, count=1):
+    def sync_clock(self, count=1, timeout=.3):
+        # A slow ping only means a worse clock estimate; it must not drop the
+        # whole B connection (A/B/Gazebo share one CPU on ROG). Missing syncs
+        # still fail closed via feedback_clock_sync_expired after 10 s.
         observations = []
         for _ in range(count):
             start = ns()
-            result = self.request("ping", timeout=.3)
+            try:
+                result = self.request("ping", timeout=timeout, close_on_timeout=False)
+            except TimeoutError:
+                self.ping_timeouts += 1
+                continue
             finish = ns()
             observations.append((finish-start, (start+finish)//2-result["b_ns"], finish))
+        if not observations:
+            raise TimeoutError("ping_timeout")
         rtt, offset, stamp = min(observations)
         with self.lock:
             self.offset_ns, self.uncertainty_ns = offset, rtt//2
@@ -235,8 +247,16 @@ class RobotClient:
         while not self.stop.wait(2):
             try:
                 self.sync_clock(3)
-            except (OSError, TimeoutError, ValueError, ConnectionError):
+            except TimeoutError:
+                continue
+            except (OSError, ValueError, ConnectionError):
                 break
+
+    def disconnect_reason(self):
+        connection = self.connection
+        if connection is None or not connection.closed.is_set():
+            return None
+        return getattr(connection, "error", None) or self.error or "connection_closed"
 
     @property
     def feedback_timeout(self):
@@ -244,11 +264,14 @@ class RobotClient:
 
     def feedback_diagnostics(self, reference=None):
         with self.lock:
-            return diagnose_feedback(state=self.state, hello=self.hello or {}, now=ns(),
+            result = diagnose_feedback(state=self.state, hello=self.hello or {}, now=ns(),
                 connected=bool(self.connection and not self.connection.closed.is_set()),
                 offset=self.offset_ns, uncertainty=self.uncertainty_ns, sync_ns=self.sync_ns,
                 timeout=self.feedback_timeout, received_ns=self.state_received_ns,
                 arrival_gap_ns=self.arrival_gap_ns, reference=reference)
+        result["disconnect_reason"] = self.disconnect_reason()
+        result["ping_timeouts"] = self.ping_timeouts
+        return result
 
     def snapshot(self, require_fresh=True):
         with self.lock:

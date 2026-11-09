@@ -9,6 +9,7 @@ from urllib.error import HTTPError
 import h5py
 import pytest
 
+from sawyer_teleop.episode_store import open_episode
 from sawyer_teleop.backends import FakeBackend
 from sawyer_teleop.cameras import CameraHub, SyntheticCamera
 from sawyer_teleop.client import RobotClient
@@ -115,10 +116,10 @@ def test_timer_discard_save_and_batch_end_use_existing_recording_state(web):
     s.command(OWNER, 6, 'end_recording', {})
     until(s, lambda snap: snap['state'].get('recording_phase') == 'idle')
     assert s.operator.saved_count == 2 and not s.operator.auto_recording
-    files = list((root/'data/batch').glob('episode_*/raw.hdf5'))
+    files = list((root/'data/batch').glob('episode_*/manifest.json'))
     assert len(files) == 2
     for path in files:
-        with h5py.File(path) as f:
+        with open_episode(path.parent) as f:
             assert f.attrs['complete'] and len(f['states/ns']) > 0
 
 
@@ -148,9 +149,9 @@ def test_ui_loss_stops_submissions_retains_incomplete_and_never_auto_resumes(web
     time.sleep(.08)
     assert bridge.core.submitted == count and not bridge.core.armed
     assert old.stop.is_set() and not old.thread.is_alive()
-    files = list((root/'data/interrupted').glob('episode_*/raw.hdf5'))
+    files = list((root/'data/interrupted').glob('episode_*/manifest.json'))
     assert len(files) == 1
-    with h5py.File(files[0]) as f:
+    with open_episode(files[0].parent) as f:
         assert not f.attrs['complete']
     s.claim(OWNER)
     snap = s.snapshot(OWNER)
@@ -280,3 +281,27 @@ def test_camera_sliders_apply_save_and_lock_while_recording(web):
     s.command(OWNER, 10, 'end_recording', {})
     until(s, lambda snap: snap['state'].get('recording_phase') in ('idle', 'complete'))
     assert s.command(OWNER, 11, 'camera_controls', {'name': 'wrist', 'controls': {'gain': 1}})['ok']
+
+
+def test_lost_b_connection_is_logged_once_with_its_reason(web):
+    s, _, _, _ = web
+    connect(s)
+    s.operator.robot.connection.close('send_failed:timed out')
+    until(s, lambda snap: not snap['state'].get('robot_connected'))
+    until(s, lambda snap: any('B connection lost: send_failed:timed out' in e['text'] for e in s.events))
+    time.sleep(.3)
+    assert sum('B connection lost' in e['text'] for e in s.events) == 1
+    assert s.snapshot(OWNER)['state']['robot_disconnect_reason'] == 'send_failed:timed out'
+
+
+def test_wireless_switch_selects_and_saves_serial_and_is_blocked_while_connected(web, monkeypatch):
+    s, _, _, root = web
+    monkeypatch.setattr('sawyer_teleop.web_session.enable_wireless', lambda adb, serial: '10.0.0.7:5555')
+    assert s.command(OWNER, 1, 'wireless', {})['ok']
+    until(s, lambda snap: snap['wireless']['seq'] == 1 and not snap['wireless']['running'])
+    snap = s.snapshot(OWNER)
+    assert snap['wireless']['serial'] == '10.0.0.7:5555' and '10.0.0.7:5555' in snap['devices']
+    assert json.loads((root/'operator.json').read_text())['quest_serial'] == '10.0.0.7:5555'
+    connect(s, seq=2)
+    result = s.command(OWNER, 3, 'wireless', {})
+    assert not result['ok'] and 'Disconnect' in result['error']

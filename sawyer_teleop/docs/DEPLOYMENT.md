@@ -251,6 +251,14 @@ PollIntervalMinSec=16s，PollIntervalMaxSec=32s。NTP不是deploy的一部分。
 【粘贴页面报错、B启动输出、timesync-status和最新反馈日志】
 ```
 
+## Quest 无线连接（可选，2026-11-09，未经真机验证）
+
+1. Quest 与 A 电脑连同一网络；Quest 先用 USB 连 A，并在头显里允许 USB 调试。
+2. Web 界面处于未连接状态时，点 Connections 卡片 Quest serial 旁的 **Wireless**；日志出现 `Quest wireless ADB ready: IP:5555`、按钮下方显示 `Quest (Wi-Fi): Authorized · IP:5555` 即连上，序列号已自动填好并保存。
+3. 拔掉 USB 线，再点 Connect。
+4. Quest 重启或换网络后无线失效：重新插 USB、再点一次 Wireless。要改回 USB，在 Quest serial 里选 USB 序列号（或清空）后再连接。
+5. 若频繁出现 `ADB latency too high to verify input age` 或 `quest_stale`，说明无线延迟不够，改回 USB。
+
 ## A 端两路相机（Windows，2026-11-07）
 
 Web A 启动后常驻采集 `operator.json` 的 `cameras`，在 Live status 下方并排显示；勾选 Record cameras 时录制复用同一采集。
@@ -260,7 +268,7 @@ Web A 启动后常驻采集 `operator.json` 的 `cameras`，在 Live status 下�
   “USB20 Camera” → 更新驱动程序 → 浏览我的电脑 → 让我从列表中选取 → Universal Serial Bus devices → 厂商 / 型号均选 “WinUsb Device” → 警告点“是”。
   **必须直接插电脑 USB 口**：经 WCH 扩展坞（1a86:8095）时高带宽传输约 2 s 后掉线。成像参数在 `wrist.controls`。默认值由用户指定为 `exposure 100 / gain 3`（2026-11-09；未在任务桌面实测饱和情况），红蓝平衡保持原 33 / 28，不做颜色矫正（用户要求腕部输出传感器原始颜色）。代码支持可选的 `color_correction`（主机端 3×3 RGB 矩阵），默认不配置即不处理。Linux 的 `sandberg_camera/camera_profile.json` 未同步。原始 Bayer 模式下 `brightness` / `contrast` / `saturation` 不生效，只有曝光、增益、红蓝平衡和少量伽马有效。
 - 依赖：Windows 运行时需 `libusb1==3.4.0`（`Setup.cmd` 会按 pyproject 安装；`Test.cmd env` 自检会导入 `usb1`）。
-- 同一相机同一时间只能被一个 Web A 占用；改配置或代码后先在原 Start-A 窗口 Ctrl+C 再重启。
+- 同一相机同一时间只能被一个 Web A 占用；改配置或代码后直接再双击 Start-A：会自动停止旧实例（断开会话、释放相机）再启动新的（2026-11-09 起）。正在录制时会拒绝重启，先 Save & End 等处理完。若旧实例无响应，仍需在原窗口 Ctrl+C。
 
 ## 实验室 Reset arm 姿态（2026-11-07，2026-11-09 按现场当前关节角更新）
 

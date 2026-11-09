@@ -48,19 +48,37 @@ def test_bad_or_stale_registry_is_not_a_running_instance(tmp_path, content):
     assert existing_url(config) is None
 
 
-def test_repeat_start_reuses_url_without_constructing_a_session(monkeypatch, capsys, tmp_path):
+def test_repeat_start_refused_by_running_instance_does_not_construct_a_session(monkeypatch, capsys, tmp_path):
     class Busy:
         def __init__(self, *args): pass
         def acquire(self): raise RuntimeError('busy')
-    calls = []
     monkeypatch.setattr('sawyer_teleop.web_server.ProcessLock', Busy)
-    monkeypatch.setattr('sawyer_teleop.web_server.existing_url', lambda path:'http://127.0.0.1:8780/#token=test')
-    monkeypatch.setattr('sawyer_teleop.web_server.webbrowser.open', calls.append)
+    monkeypatch.setattr('sawyer_teleop.web_server.request_shutdown', lambda path: (False, 'Recording in progress.'))
     def forbidden(*args):raise AssertionError('Must not construct a second Operator service')
     monkeypatch.setattr('sawyer_teleop.web_server.WebSession', forbidden)
-    assert run_web(tmp_path/'operator.json')
-    assert calls == ['http://127.0.0.1:8780/#token=test']
-    assert 'Reusing' in capsys.readouterr().out
+    assert run_web(tmp_path/'operator.json') is False
+    assert 'refused to restart: Recording in progress.' in capsys.readouterr().out
+
+
+def test_shutdown_endpoint_refuses_while_recording_and_stops_server_otherwise(web, monkeypatch):
+    from sawyer_teleop.web_instance import request_shutdown
+    session, _, _, _ = web
+    server = WebServer(session, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True);thread.start()
+    try:
+        publish_instance(session.path, server)
+        monkeypatch.setattr('sawyer_teleop.web_server.recording_busy', lambda state: True)
+        class Op:
+            def view(self): return {}
+        session.operator = Op()
+        accepted, error = request_shutdown(session.path)
+        assert not accepted and 'Recording' in error and thread.is_alive()
+        session.operator = None
+        assert request_shutdown(session.path) == (True, None)
+        thread.join(3)
+        assert not thread.is_alive()
+    finally:
+        server.shutdown();server.server_close();thread.join(3)
 
 
 def test_legacy_running_instance_has_actionable_message_without_traceback(tmp_path, capsys):
@@ -69,30 +87,30 @@ def test_legacy_running_instance_has_actionable_message_without_traceback(tmp_pa
     try:
         assert run_web(config, open_browser=False) is False
         text = capsys.readouterr().out
-        assert 'Ctrl+C' in text and 'Save & End' in text and 'Traceback' not in text
+        assert 'Ctrl+C' in text and 'did not answer' in text and 'Traceback' not in text
     finally:
         lock.close()
 
 
-def test_two_actual_processes_reuse_service_and_recover_after_first_exits(tmp_path):
+def test_second_process_restarts_the_first_and_takes_over(tmp_path):
     config = tmp_path/'operator.json'
     config.write_text(json.dumps(dict(adb='missing-adb-for-software-test', data_dir=str(tmp_path/'data'))))
     code = 'import sys;sys.path.insert(0,sys.argv.pop(1));from sawyer_teleop.cli import main;main()'
     command = [sys.executable, '-I', '-c', code, str(ROOT/'src'), 'web', '--config', str(config), '--port', '0', '--no-browser']
     flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
     first = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
+    second = None
     try:
         wait_until(lambda: existing_url(config) is not None, timeout=8)
         url = existing_url(config)
-        duplicate = subprocess.run(command, capture_output=True, text=True, timeout=8, creationflags=flags)
-        assert duplicate.returncode == 0 and 'Reusing' in duplicate.stdout and url in duplicate.stdout
-        assert not duplicate.stderr and first.poll() is None
+        second = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
+        assert first.wait(timeout=30) == 0  # Old instance exits cleanly on request.
+        wait_until(lambda: existing_url(config) not in (None, url), timeout=15)
+        assert second.poll() is None
     finally:
-        first.terminate();first.communicate(timeout=5)
-    assert existing_url(config) is None  # A stale JSON file cannot revive a dead process.
-    third = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
-    try:
-        wait_until(lambda: existing_url(config) is not None, timeout=8)
-        assert existing_url(config) != url
-    finally:
-        third.terminate();third.communicate(timeout=5)
+        for process in (first, second):
+            if process and process.poll() is None:
+                process.terminate()
+            if process:
+                process.communicate(timeout=10)
+    assert existing_url(config) is None

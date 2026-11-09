@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 
 import h5py
+
+from .episode_store import is_episode, open_episode
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -18,7 +20,7 @@ def summary(values):
 
 def analyze_episode(directory):
     directory = Path(directory)
-    with h5py.File(directory/"raw.hdf5", "r") as data:
+    with open_episode(directory) as data:
         metadata = json.loads(data.attrs.get("metadata", "{}"))
         complete = bool(data.attrs.get("complete", False))
         times = data["commands/ns"][:] if "commands/ns" in data else np.array([], dtype=np.int64)
@@ -100,13 +102,14 @@ def analyze_motion(source):
     source = Path(source)
     if source.name == "raw.hdf5" and source.is_file():
         directories = [source.parent]
-    elif (source/"raw.hdf5").is_file():
+    elif is_episode(source):
         directories = [source]
     else:
-        directories = sorted(p.parent for p in source.rglob("raw.hdf5")
-                             if not any(part.startswith(".pending_") for part in p.parts))
+        directories = sorted({p.parent for name in ("raw.hdf5", "manifest.json") for p in source.rglob(name)
+                              if is_episode(p.parent)
+                              and not any(part.startswith(".pending_") for part in p.parts)})
     if not directories:
-        raise ValueError("No episode/raw.hdf5 found: "+str(source))
+        raise ValueError("No episode found (folder episode or raw.hdf5): "+str(source))
     return {"schema_version": 1, "episodes": [analyze_episode(path) for path in directories],
             "notes": [
                 "Target changes do not measure real robot jitter; fake results do not validate physical motion.",

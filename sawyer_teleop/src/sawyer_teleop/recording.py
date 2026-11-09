@@ -1,4 +1,8 @@
-"""A-only episode storage. One writer owns HDF5, videos and episode diagnostics."""
+"""A-only episode storage: one writer thread appends plain raw files (no HDF5 while recording).
+
+See ``episode_store`` for the folder layout. Disk writes release the GIL, so recording does not
+compete with control, IK or camera threads; previews (MP4) are encoded after save in another process.
+"""
 import datetime
 import json
 import os
@@ -9,14 +13,14 @@ import threading
 import time
 import uuid
 
-import cv2
-import h5py
 import numpy as np
 
 from .protocol import ns
+from .episode_store import TABLES, jsonable, start_video_process
 
-SCHEMA_VERSION = 2
-# Commands carry an integer kind; h5py cannot store numpy unicode arrays.
+SCHEMA_VERSION = 3
+STORAGE_FORMAT = "folder_raw_v1"
+# Commands carry an integer kind (kept from schema 2 so readers need no string columns).
 COMMAND_KINDS = {"joint_target": 0, "cartesian_goal": 1}
 # Camera quality (DROID-style: never duplicate or synthesize frames; flag, then let
 # offline alignment drop timesteps without a fresh frame).
@@ -31,6 +35,7 @@ FEEDBACK_GAP_DEGRADED_MS = 100.
 # as well, including when no telemetry is being recorded.
 RECORDING_QUEUE_ITEMS = 2048
 RECORDING_QUEUE_IMAGE_BYTES = 128 * 1024 * 1024
+FLUSH_INTERVAL_S = .1
 
 
 def camera_quality(stamps, fps, start_ns, end_ns):
@@ -92,41 +97,86 @@ def latest_index(source_ns, query_ns):
     return np.searchsorted(np.asarray(source_ns), np.asarray(query_ns), side="right").astype(np.int64)-1
 
 
-class _RowBuffer:
-    """Bounded HDF5 batches; owned only by the episode's writer thread."""
+def open_file(path, mode):
+    """Single place files are opened (tests patch it to inject disk failures)."""
+    return open(path, mode, **({} if "b" in mode else {"encoding": "utf-8"}))
 
-    def __init__(self, group, single_row_columns=()):
-        self.group = group
-        self.single_row_columns = single_row_columns
-        self.rows = []
-        self.datasets = {}
+
+class _Lines:
+    """Buffered JSON-lines table; flushed in batches by the writer thread only."""
+
+    def __init__(self, path):
+        self.file = open_file(path, "w")
+        self.lines = []
 
     def append(self, row):
-        self.rows.append(row)
-        if len(self.rows) >= 32:
-            self.flush()
+        self.lines.append(json.dumps(jsonable(row), ensure_ascii=False, allow_nan=False))
 
     def flush(self):
-        if not self.rows:
-            return
-        for name in self.rows[0]:
-            values = np.asarray([row[name] for row in self.rows])
-            if name not in self.datasets:
-                shape = values.shape[1:]
-                chunk_rows = 1 if name in self.single_row_columns else 128
-                self.datasets[name] = self.group.create_dataset(
-                    name, shape=(0,)+shape, maxshape=(None,)+shape,
-                    dtype=values.dtype, chunks=(chunk_rows,)+shape,
-                    compression="lzf" if shape else None)
-            dataset = self.datasets[name]
-            start = len(dataset)
-            dataset.resize(start+len(values), axis=0)
-            dataset[start:] = values
-        self.rows.clear()
+        if self.lines:
+            self.file.write("\n".join(self.lines)+"\n")
+            self.lines.clear()
+        self.file.flush()
+
+    def close(self):
+        self.flush()
+        self.file.close()
+
+
+class _Camera:
+    """frames.rgb (raw bytes, appended) + frames.jsonl (per-frame times) + info.json."""
+
+    def __init__(self, folder, shape, dtype):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder/"info.json").write_text(json.dumps({"shape": list(shape), "dtype": str(dtype),
+            "layout": "C-order frames back to back; frame i is bytes [i*N, (i+1)*N)"}), encoding="utf-8")
+        self.rgb = open_file(folder/"frames.rgb", "wb")
+        self.meta = _Lines(folder/"frames.jsonl")
+        self.shape = shape
+
+    def append(self, frame, rgb):
+        self.rgb.write(memoryview(np.ascontiguousarray(rgb)).cast("B"))
+        self.meta.append({"ns": frame["ns"], "read_start_ns": frame["read_start_ns"], "seq": frame["seq"],
+                          "source_seq": int(frame.get("source_seq", -1)),
+                          "open_count": int(frame.get("open_count", -1))})
+
+    def flush(self):
+        self.rgb.flush()
+        self.meta.flush()
+
+    def close(self):
+        self.meta.close()
+        self.rgb.close()
+
+
+class _Stats:
+    """Writer health: queue high-water marks and time spent per item kind."""
+
+    def __init__(self):
+        self.max_items = self.max_image_bytes = 0
+        self.kinds = {}
+        self.queue_full = None
+
+    def add(self, kind, seconds):
+        item = self.kinds.setdefault(kind, {"count": 0, "total_s": 0., "max_ms": 0.})
+        item["count"] += 1
+        item["total_s"] += seconds
+        item["max_ms"] = max(item["max_ms"], seconds*1000)
+
+    def summary(self, started_ns, ended_ns):
+        duration = max(1e-9, (ended_ns-started_ns)/1e9)
+        busy = sum(k["total_s"] for k in self.kinds.values())
+        return {"queue_capacity_items": RECORDING_QUEUE_ITEMS,
+                "queue_capacity_image_bytes": RECORDING_QUEUE_IMAGE_BYTES,
+                "max_queued_items": self.max_items, "max_queued_image_bytes": self.max_image_bytes,
+                "busy_fraction": round(busy/duration, 4), "queue_full": self.queue_full,
+                "kinds": {k: dict(v, total_s=round(v["total_s"], 4), max_ms=round(v["max_ms"], 3))
+                          for k, v in self.kinds.items()}}
 
 
 class Episode:
-    def __init__(self, root, metadata, camera_names=(), fps=30, queue_size=RECORDING_QUEUE_ITEMS):
+    def __init__(self, root, metadata, camera_names=(), fps=30, queue_size=RECORDING_QUEUE_ITEMS,
+                 videos=False):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
@@ -137,19 +187,26 @@ class Episode:
         self.metadata = dict(metadata, cameras=list(camera_names),
                              started_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                              started_ns=self.started_ns,
-                             schema_version=SCHEMA_VERSION, action_semantics="absolute_joint_target_rad",
+                             schema_version=SCHEMA_VERSION, storage_format=STORAGE_FORMAT,
+                             action_semantics="absolute_joint_target_rad",
                              camera_timestamp="host_read_completion; exposure time unknown",
                              command_kind_codes=COMMAND_KINDS,
                              layout={
-                                 "states": "A-loop snapshot of B's latest feedback, deduplicated (~operator rate)",
-                                 "feedback/joint": "every accepted /robot/joint_states message (native rate) when B supports feedback_stream",
-                                 "feedback/pose": "every accepted endpoint_state message (native rate) when B supports feedback_stream",
-                                 "frames/<camera>": "every recorded frame, lossless RGB; <camera>.mp4 holds the same frames in order (lossy preview)",
-                                 "alignment/<camera>": "per frame: newest row index at or before the frame time in states / feedback (-1 none)",
-                                 "time": "all *ns fields are A perf_counter ns; source_stamp is the ROS header stamp (s)"})
+                                 "states.jsonl": "A-loop snapshot of B's latest feedback, deduplicated (~operator rate)",
+                                 "feedback_joint.jsonl": "every accepted /robot/joint_states message (native rate) when B supports feedback_stream",
+                                 "feedback_pose.jsonl": "every accepted endpoint_state message (native rate) when B supports feedback_stream",
+                                 "commands.jsonl": "submitted commands",
+                                 "cameras/<name>/frames.rgb": "every recorded frame, raw uint8 RGB back to back (shape in info.json); frames.jsonl has one line per frame",
+                                 "cameras/<name>/video.mp4": "same frames in order, lossy preview made after save (videos.json reports status)",
+                                 "alignment": "not stored; episode_store.open_episode computes frame->row indices from the ns columns",
+                                 "time": "all *ns fields are A perf_counter ns; source_stamp is the ROS header stamp (s); null = NaN"})
         self.fps = fps
+        self.videos = videos
+        self.video_process = None
         self.queue = queue.Queue(queue_size)
+        self.queue_size = queue_size
         self._queued_image_bytes = 0
+        self.stats = _Stats()
         self.error = None
         self.accepting = True
         self.sealed_ns = None
@@ -165,16 +222,22 @@ class Episode:
             if not self.accepting or self.error:
                 return False
             image_bytes = data[1]["rgb"].nbytes if kind == "frame" else 0
-            if self._queued_image_bytes + image_bytes > RECORDING_QUEUE_IMAGE_BYTES:
+            full = self._queued_image_bytes + image_bytes > RECORDING_QUEUE_IMAGE_BYTES
+            if not full:
+                try:
+                    self.queue.put_nowait((kind, data, image_bytes))
+                except queue.Full:
+                    full = True
+            if full:
                 self.error = "recording_queue_full"
+                self.stats.queue_full = {"at_s": round((ns()-self.started_ns)/1e9, 3), "kind": kind,
+                                         "queued_items": self.queue.qsize(),
+                                         "queued_image_bytes": self._queued_image_bytes}
                 return False
-            try:
-                self.queue.put_nowait((kind, data, image_bytes))
-                self._queued_image_bytes += image_bytes
-                return True
-            except queue.Full:
-                self.error = "recording_queue_full"
-                return False
+            self._queued_image_bytes += image_bytes
+            self.stats.max_items = max(self.stats.max_items, self.queue.qsize())
+            self.stats.max_image_bytes = max(self.stats.max_image_bytes, self._queued_image_bytes)
+            return True
 
     def event(self, reason, **details):
         self.put("event", dict(details, reason=reason, a_ns=ns()))
@@ -208,36 +271,31 @@ class Episode:
                 self.finish_request = (save, stop_result or {"holding": False})
         return self.done
 
+    def _fps(self, name):
+        return self.fps.get(name, 30) if isinstance(self.fps, dict) else self.fps
+
     def _write(self):
-        videos = {}
-        data = None
-        log = None
-        last_state_seq = None
-        frame_sequences = {}
+        files = []
+        self.complete = False
         try:
-            data = h5py.File(self.path/"raw.hdf5", "w")
-            data.attrs["metadata"] = json.dumps(self.metadata, ensure_ascii=False)
-            data.attrs["complete"] = False
-            states = _RowBuffer(data.create_group("states"))
-            commands = _RowBuffer(data.create_group("commands"))
-            feedback = data.create_group("feedback")
-            streams = {"joint": _RowBuffer(feedback.create_group("joint")),
-                       "pose": _RowBuffer(feedback.create_group("pose"))}
-            stream_session = None
-            stream_skipped = {"no_clock_sync": 0, "other_session": 0}
-            frames = data.create_group("frames")
-            frame_buffers = {}
-            last_frame_ns = {}
-            log = (self.path/"events.jsonl").open("w", encoding="utf-8")
-            buffers = [states, commands, *streams.values()]
-            next_flush = time.monotonic()+.1
+            tables = {name: _Lines(self.path/file) for name, file in TABLES.items()}
+            log = _Lines(self.path/"events.jsonl")
+            files += [*tables.values(), log]
+            cameras = {}
+            # Kept in memory for the quality summary (cheap integers only).
+            seen = {"state": None, "frames": {}, "frame_ns": {}, "stream": {"joint": ([], []), "pose": ([], [])},
+                    "state_ns": [], "stream_session": None,
+                    "stream_skipped": {"no_clock_sync": 0, "other_session": 0}}
+            next_flush = time.monotonic()+FLUSH_INTERVAL_S
             while True:
-                # Batch storage work without holding up control or changing its
+                # Batch file writes without holding up control or changing its
                 # sampling rate. Idle/low-rate captures also flush every 100 ms.
                 if time.monotonic() >= next_flush:
-                    for buffer in buffers:
-                        buffer.flush()
-                    next_flush = time.monotonic()+.1
+                    began = time.perf_counter()
+                    for item in files:
+                        item.flush()
+                    self.stats.add("flush", time.perf_counter()-began)
+                    next_flush = time.monotonic()+FLUSH_INTERVAL_S
                 try:
                     kind, value, image_bytes = self.queue.get(timeout=max(0., next_flush-time.monotonic()))
                 except queue.Empty:
@@ -248,119 +306,23 @@ class Episode:
                 if image_bytes:
                     with self.lock:
                         self._queued_image_bytes -= image_bytes
+                began = time.perf_counter()
                 if kind == "state":
-                    sample = value["sample"]
-                    key = (value["session"], sample["seq"])
-                    if sample["valid"] and key != last_state_seq:
-                        last_state_seq = key
-                        gripper = sample.get("gripper") or {}
-                        ticks = gripper.get("position_ticks")
-                        ticks_valid = bool(gripper.get("valid") and ticks is not None)
-                        open_ticks, closed_ticks = gripper.get("open_ticks"), gripper.get("closed_ticks")
-                        # Encoder scale only (0 closed endpoint, 1 open endpoint);
-                        # finger distance is uncalibrated and deliberately not recorded.
-                        open_fraction = (float(np.clip((ticks-closed_ticks)/(open_ticks-closed_ticks), 0., 1.))
-                                         if ticks_valid and open_ticks is not None and closed_ticks is not None
-                                         and open_ticks != closed_ticks else float("nan"))
-                        row = {"ns": sample.get("available_ns", sample["captured_ns"])+value["clock_offset_ns"],
-                               "captured_ns": sample["captured_ns"]+value["clock_offset_ns"],
-                               "source_stamp": sample.get("source_stamp", 0.),
-                               "pose_source_stamp": sample.get("pose_source_stamp", 0.),
-                               "uncertainty_ns": value["clock_uncertainty_ns"],
-                               "source_seq": sample["seq"], "q": sample["q"], "dq": sample["dq"],
-                               "eef_pos": sample["pose"]["p"], "eef_quat": sample["pose"]["q"],
-                               "eef_twist": sample.get("twist") or [0.]*6,
-                               "eef_twist_valid": sample.get("twist") is not None,
-                               "gripper_position_ticks": ticks if ticks is not None else 0,
-                               "gripper_ticks_valid": ticks_valid,
-                               "gripper_open_fraction": open_fraction,
-                               "gripper_target_ticks": gripper.get("target_ticks") or 0,
-                               "gripper_feedback_age_ms": gripper.get("age_ms") or 0.}
-                        states.append(row)
+                    self._state(value, tables["states"], seen)
                 elif kind == "command":
-                    target = value.get("target_pose") or {}
-                    target_valid = (isinstance(target.get("p"), (list, tuple)) and len(target["p"]) == 3
-                                    and isinstance(target.get("q"), (list, tuple)) and len(target["q"]) == 4)
-                    commands.append({
-                        "command_kind": COMMAND_KINDS.get(value.get("command_kind") or "joint_target", -1),
-                        "target_pos": list(target["p"]) if target_valid else [0.]*3,
-                        "target_quat": list(target["q"]) if target_valid else [0., 0., 0., 1.],
-                        "target_pose_valid": bool(target_valid),
-                        "ns": value["b_ns"]+value["offset_ns"],
-                        "uncertainty_ns": value["uncertainty_ns"], "q": value["q"],
-                        "seq": value["seq"], "feedback_seq": value["feedback_seq"],
-                        "generation": value["generation"], "segment": value["segment"],
-                        "gripper": value.get("gripper") if value.get("gripper") is not None else 0,
-                        "gripper_valid": value.get("gripper") in (-1, 1),
-                    })
+                    self._command(value, tables["commands"])
                 elif kind == "frame":
-                    name, frame = value
-                    if frame["seq"] <= frame_sequences.get(name, -1):
-                        continue
-                    frame_sequences[name] = frame["seq"]
-                    fps = self.fps.get(name, 30) if isinstance(self.fps, dict) else self.fps
-                    previous = last_frame_ns.get(name)
-                    if previous is not None and fps and frame["ns"]-previous > CAMERA_GAP_FACTOR*1e9/fps:
-                        # Recorded, never filled: offline alignment drops timesteps without a frame.
-                        log.write(json.dumps({"reason": "camera_frame_gap", "a_ns": frame["ns"],
-                            "camera": name, "gap_ms": (frame["ns"]-previous)/1e6,
-                            "missing_estimate": int(round((frame["ns"]-previous)*fps/1e9))-1},
-                            allow_nan=False)+"\n")
-                    last_frame_ns[name] = frame["ns"]
-                    rgb = frame["rgb"]
-                    if name not in videos:
-                        h, w = rgb.shape[:2]
-                        writer = cv2.VideoWriter(str(self.path/(name+".mp4")),
-                                                 cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
-                        if not writer.isOpened():
-                            raise RuntimeError("video_writer_failed:" + name)
-                        videos[name] = (writer, rgb.shape)
-                        frame_buffers[name] = _RowBuffer(frames.create_group(name), single_row_columns=("rgb",))
-                        buffers.append(frame_buffers[name])
-                    writer, shape = videos[name]
-                    if rgb.shape != shape:
-                        raise RuntimeError("camera_resolution_changed")
-                    frame_buffers[name].append({
-                        "ns": frame["ns"], "read_start_ns": frame["read_start_ns"], "seq": frame["seq"],
-                        "source_seq": np.int64(frame.get("source_seq", -1)),
-                        "open_count": np.int64(frame.get("open_count", -1)), "rgb": rgb,
-                    })
-                    writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+                    self._frame(value, cameras, files, log, seen)
                 elif kind == "stream":
-                    for row in value:
-                        offset = row.get("clock_offset_ns")
-                        if offset is None:
-                            stream_skipped["no_clock_sync"] += 1
-                            continue
-                        stream_session = stream_session or row.get("session")
-                        if row.get("session") != stream_session:
-                            stream_skipped["other_session"] += 1
-                            continue
-                        common = {"ns": row["b_received_ns"]+offset,
-                                  "captured_ns": row["b_captured_ns"]+offset,
-                                  "a_received_ns": row["a_received_ns"],
-                                  "source_stamp": row["source_stamp"],
-                                  "uncertainty_ns": row.get("clock_uncertainty_ns") or 0,
-                                  "stream_seq": row["stream_seq"]}
-                        if row["kind"] == "joint":
-                            head = row.get("head_pan")
-                            streams["joint"].append(dict(common, q=row["q"], dq=row["dq"],
-                                head_pan=head if head is not None else 0., head_pan_valid=head is not None))
-                        else:
-                            twist = row.get("twist")
-                            streams["pose"].append(dict(common, eef_pos=row["p"], eef_quat=row["q"],
-                                eef_twist=twist or [0.]*6, eef_twist_valid=twist is not None))
+                    self._stream(value, tables, seen)
                 elif kind == "event":
-                    log.write(json.dumps(value, ensure_ascii=False, allow_nan=False)+"\n")
-            # Finish only after every accepted row, including a short final
-            # batch, has been written. A write failure keeps complete=False.
-            for buffer in buffers:
-                buffer.flush()
+                    log.append(value)
+                self.stats.add(kind, time.perf_counter()-began)
+            for item in files:
+                item.flush()
             save, stop_result = self.finish_request
             ended_ns = ns()
-            quality = None
-            if not self.error:
-                quality = self._quality_and_alignment(data, ended_ns, stop_result, stream_skipped)
+            quality = None if self.error else self._quality(seen, ended_ns, stop_result)
             # Lab convention: the operator discards failed demonstrations, so an
             # explicit operator save is a success label. Time-limit, camera-loss,
             # shutdown and failed writes were not judged by the operator: unknown.
@@ -368,34 +330,122 @@ class Episode:
                                     and not self.error) else None
             self.metadata.update(ended_ns=ended_ns, stop=stop_result, quality=quality,
                                  task_success=task_success,
-                                 task_success_source="operator_saved" if task_success else None,
-                                 recording_error=self.error)
-            data.attrs["metadata"] = json.dumps(self.metadata, ensure_ascii=False)
+                                 task_success_source="operator_saved" if task_success else None)
             # Completion is a closed capture, not a statement that the robot is stopped.
-            data.attrs["complete"] = bool(not self.error and (stop_result.get("holding") or stop_result.get("capture_closed")))
-            data.flush()
+            self.complete = bool(not self.error and (stop_result.get("holding") or stop_result.get("capture_closed")))
         except Exception as exc:
             self.error = str(exc)
+            self.complete = False
         finally:
-            self._finish_files(data, log, videos)
+            self._finish_files(files)
 
-    def _quality_and_alignment(self, data, ended_ns, stop_result, stream_skipped):
-        """Per-episode quality summary plus a frame->robot-row index. Never raises."""
+    def _state(self, value, table, seen):
+        sample = value["sample"]
+        key = (value["session"], sample["seq"])
+        if not sample["valid"] or key == seen["state"]:
+            return
+        seen["state"] = key
+        gripper = sample.get("gripper") or {}
+        ticks = gripper.get("position_ticks")
+        ticks_valid = bool(gripper.get("valid") and ticks is not None)
+        open_ticks, closed_ticks = gripper.get("open_ticks"), gripper.get("closed_ticks")
+        # Encoder scale only (0 closed endpoint, 1 open endpoint);
+        # finger distance is uncalibrated and deliberately not recorded.
+        open_fraction = (float(np.clip((ticks-closed_ticks)/(open_ticks-closed_ticks), 0., 1.))
+                         if ticks_valid and open_ticks is not None and closed_ticks is not None
+                         and open_ticks != closed_ticks else None)
+        row = {"ns": sample.get("available_ns", sample["captured_ns"])+value["clock_offset_ns"],
+               "captured_ns": sample["captured_ns"]+value["clock_offset_ns"],
+               "source_stamp": float(sample.get("source_stamp", 0.)),
+               "pose_source_stamp": float(sample.get("pose_source_stamp", 0.)),
+               "uncertainty_ns": value["clock_uncertainty_ns"],
+               "source_seq": sample["seq"], "q": sample["q"], "dq": sample["dq"],
+               "eef_pos": sample["pose"]["p"], "eef_quat": sample["pose"]["q"],
+               "eef_twist": sample.get("twist") or [0.]*6,
+               "eef_twist_valid": sample.get("twist") is not None,
+               "gripper_position_ticks": ticks if ticks is not None else 0,
+               "gripper_ticks_valid": ticks_valid,
+               "gripper_open_fraction": open_fraction,
+               "gripper_target_ticks": gripper.get("target_ticks") or 0,
+               "gripper_feedback_age_ms": float(gripper.get("age_ms") or 0.)}
+        seen["state_ns"].append(row["ns"])
+        table.append(row)
+
+    def _command(self, value, table):
+        target = value.get("target_pose") or {}
+        target_valid = (isinstance(target.get("p"), (list, tuple)) and len(target["p"]) == 3
+                        and isinstance(target.get("q"), (list, tuple)) and len(target["q"]) == 4)
+        table.append({
+            "command_kind": COMMAND_KINDS.get(value.get("command_kind") or "joint_target", -1),
+            "target_pos": [float(v) for v in target["p"]] if target_valid else [0.]*3,
+            "target_quat": [float(v) for v in target["q"]] if target_valid else [0., 0., 0., 1.],
+            "target_pose_valid": bool(target_valid),
+            "ns": value["b_ns"]+value["offset_ns"],
+            "uncertainty_ns": value["uncertainty_ns"], "q": value["q"],
+            "seq": value["seq"], "feedback_seq": value["feedback_seq"],
+            "generation": value["generation"], "segment": value["segment"],
+            "gripper": value.get("gripper") if value.get("gripper") is not None else 0,
+            "gripper_valid": value.get("gripper") in (-1, 1),
+        })
+
+    def _frame(self, value, cameras, files, log, seen):
+        name, frame = value
+        if frame["seq"] <= seen["frames"].get(name, -1):
+            return
+        seen["frames"][name] = frame["seq"]
+        rgb = frame["rgb"]
+        if name not in cameras:
+            cameras[name] = _Camera(self.path/"cameras"/name, rgb.shape, rgb.dtype)
+            files.append(cameras[name])
+            seen["frame_ns"][name] = []
+        camera = cameras[name]
+        if rgb.shape != camera.shape:
+            raise RuntimeError("camera_resolution_changed")
+        fps = self._fps(name)
+        stamps = seen["frame_ns"][name]
+        if stamps and fps and frame["ns"]-stamps[-1] > CAMERA_GAP_FACTOR*1e9/fps:
+            # Recorded, never filled: offline alignment drops timesteps without a frame.
+            log.append({"reason": "camera_frame_gap", "a_ns": frame["ns"], "camera": name,
+                        "gap_ms": (frame["ns"]-stamps[-1])/1e6,
+                        "missing_estimate": int(round((frame["ns"]-stamps[-1])*fps/1e9))-1})
+        stamps.append(frame["ns"])
+        camera.append(frame, rgb)
+
+    def _stream(self, rows, tables, seen):
+        for row in rows:
+            offset = row.get("clock_offset_ns")
+            if offset is None:
+                seen["stream_skipped"]["no_clock_sync"] += 1
+                continue
+            seen["stream_session"] = seen["stream_session"] or row.get("session")
+            if row.get("session") != seen["stream_session"]:
+                seen["stream_skipped"]["other_session"] += 1
+                continue
+            common = {"ns": row["b_received_ns"]+offset, "captured_ns": row["b_captured_ns"]+offset,
+                      "a_received_ns": row["a_received_ns"], "source_stamp": float(row["source_stamp"]),
+                      "uncertainty_ns": row.get("clock_uncertainty_ns") or 0,
+                      "stream_seq": row["stream_seq"]}
+            topic = "joint" if row["kind"] == "joint" else "pose"
+            seq, stamps = seen["stream"][topic]
+            seq.append(row["stream_seq"])
+            stamps.append(common["ns"])
+            if topic == "joint":
+                head = row.get("head_pan")
+                tables["feedback/joint"].append(dict(common, q=row["q"], dq=row["dq"],
+                    head_pan=float(head) if head is not None else 0., head_pan_valid=head is not None))
+            else:
+                twist = row.get("twist")
+                tables["feedback/pose"].append(dict(common, eef_pos=row["p"], eef_quat=row["q"],
+                    eef_twist=twist or [0.]*6, eef_twist_valid=twist is not None))
+
+    def _quality(self, seen, ended_ns, stop_result):
+        """Per-episode quality summary from recorded times. Never raises."""
         try:
             end = self.sealed_ns or ended_ns
-            cameras = {}
-            for name in self.metadata.get("cameras", []):
-                fps = self.fps.get(name, 30) if isinstance(self.fps, dict) else self.fps
-                stamps = data["frames"][name]["ns"][:] if name in data["frames"] else []
-                cameras[name] = camera_quality(stamps, fps, self.started_ns, end)
-            feedback = {}
-            for topic in ("joint", "pose"):
-                group = data["feedback"][topic]
-                feedback[topic] = (stream_quality(group["stream_seq"][:], group["ns"][:])
-                                   if "ns" in group else stream_quality([], []))
-            states = data["states"]
-            state_ns = states["ns"][:] if "ns" in states else np.zeros(0, np.int64)
-            state_intervals = np.diff(state_ns)/1e6
+            cameras = {name: camera_quality(seen["frame_ns"].get(name, []), self._fps(name), self.started_ns, end)
+                       for name in self.metadata.get("cameras", [])}
+            feedback = {topic: stream_quality(*seen["stream"][topic]) for topic in ("joint", "pose")}
+            state_intervals = np.diff(np.asarray(seen["state_ns"], dtype=np.int64))/1e6
             reasons = []
             for name, item in cameras.items():
                 reasons += [name+":"+r for r in item["reasons"]]
@@ -405,70 +455,60 @@ class Episode:
                 reasons += ["feedback_"+topic+":"+r for r in item["reasons"]]
             status = ("incomplete" if any(c["status"] == "incomplete" for c in cameras.values())
                       or stop_result.get("camera_lost") else "degraded" if reasons else "ok")
-            alignment = data.require_group("alignment")
-            for name in cameras:
-                if name not in data["frames"]:
-                    continue
-                frame_ns = data["frames"][name]["ns"][:]
-                group = alignment.require_group(name)
-                for label, source in (("state", state_ns),
-                                      ("joint", data["feedback/joint/ns"][:] if "ns" in data["feedback/joint"] else []),
-                                      ("pose", data["feedback/pose/ns"][:] if "ns" in data["feedback/pose"] else [])):
-                    index = latest_index(source, frame_ns)
-                    source = np.asarray(source, dtype=np.int64)
-                    age = np.where(index >= 0, frame_ns-source[np.clip(index, 0, None)] if len(source) else 0, -1)
-                    group.create_dataset(label+"_index", data=index)
-                    group.create_dataset(label+"_age_ns", data=age.astype(np.int64))
-            quality = {"status": status, "reasons": reasons,
-                       "window_ns": [self.started_ns, end],
-                       "thresholds": {"camera_gap_factor": CAMERA_GAP_FACTOR,
-                                      "camera_gap_degraded_ms": CAMERA_GAP_DEGRADED_MS,
-                                      "camera_drop_degraded": CAMERA_DROP_DEGRADED,
-                                      "camera_lost_s": CAMERA_LOST_S,
-                                      "feedback_drop_degraded": FEEDBACK_DROP_DEGRADED,
-                                      "feedback_gap_degraded_ms": FEEDBACK_GAP_DEGRADED_MS},
-                       "cameras": cameras, "feedback": feedback,
-                       "feedback_rows_skipped": dict(stream_skipped),
-                       "states": {"rows": int(len(state_ns)),
-                                  "max_gap_ms": round(float(state_intervals.max()), 2) if len(state_intervals) else None,
-                                  "note": "latest-value snapshots; use feedback/* for every source message"}}
-            data.attrs["quality"] = json.dumps(quality)
-            return quality
+            return {"status": status, "reasons": reasons,
+                    "window_ns": [self.started_ns, end],
+                    "thresholds": {"camera_gap_factor": CAMERA_GAP_FACTOR,
+                                   "camera_gap_degraded_ms": CAMERA_GAP_DEGRADED_MS,
+                                   "camera_drop_degraded": CAMERA_DROP_DEGRADED,
+                                   "camera_lost_s": CAMERA_LOST_S,
+                                   "feedback_drop_degraded": FEEDBACK_DROP_DEGRADED,
+                                   "feedback_gap_degraded_ms": FEEDBACK_GAP_DEGRADED_MS},
+                    "cameras": cameras, "feedback": feedback,
+                    "feedback_rows_skipped": dict(seen["stream_skipped"]),
+                    "states": {"rows": len(seen["state_ns"]),
+                               "max_gap_ms": round(float(state_intervals.max()), 2) if len(state_intervals) else None,
+                               "note": "latest-value snapshots; use feedback_* for every source message"}}
         except Exception as exc:  # Quality is diagnostic; never lose the capture over it.
             return {"status": "unknown", "reasons": ["quality_failed: "+str(exc)]}
 
-    def _finish_files(self, data, log, videos):
+    def _finish_files(self, files):
         close_failed = False
-        closers = ([data.close] if data is not None else [])
-        closers += [log.close] if log is not None else []
-        closers += [writer.release for writer, _ in videos.values()]
-        for close in closers:
+        for item in files:
             try:
-                close()
+                item.close()
             except Exception as exc:
                 close_failed = True
                 self.error = self.error or 'recording_close_failed: '+str(exc)
+        if close_failed:
+            self.complete = False
         # On writer failure, wait for the operator to choose save or discard.
         while self.finish_request is None:
             time.sleep(.05)
         save, _ = self.finish_request
         try:
             if save:
+                self.metadata.update(recording_error=self.error, complete=bool(self.complete),
+                                     writer_stats=self.stats.summary(self.started_ns, self.sealed_ns or ns()))
                 (self.path/"manifest.json").write_text(
-                    json.dumps(dict(self.metadata, recording_error=self.error),
-                               ensure_ascii=False, indent=2), encoding="utf-8")
+                    json.dumps(jsonable(self.metadata), ensure_ascii=False, indent=2), encoding="utf-8")
                 if close_failed:
-                    # Closing did not confirm a valid file. Retain the pending
+                    # Closing did not confirm valid files. Retain the pending
                     # directory for recovery; it must not become export input.
                     self.result = self.path
                 else:
-                    for file in self.path.iterdir():
-                        # Windows FlushFileBuffers needs a writable handle.
-                        with file.open("r+b") as handle:
-                            os.fsync(handle.fileno())
+                    for file in self.path.rglob("*"):
+                        if file.is_file():
+                            # Windows FlushFileBuffers needs a writable handle.
+                            with file.open("r+b") as handle:
+                                os.fsync(handle.fileno())
                     final = self.root/("episode_"+self.ident)
                     self.path.rename(final)
                     self.result = final
+                    if self.videos and self.metadata.get("cameras"):
+                        try:
+                            self.video_process = start_video_process(final)
+                        except Exception as exc:  # Raw files are safe; previews can be re-made.
+                            (final/"videos.json").write_text(json.dumps({"error": str(exc)}), encoding="utf-8")
             else:
                 shutil.rmtree(self.path)
                 self.result = "discarded"

@@ -56,7 +56,7 @@ def test_export_excludes_quality_incomplete_even_when_capture_is_complete(batch,
     result = dataset.export_dataset(batch, output)
 
     assert result['episodes'] == result['demos'] == 1
-    assert result['excluded'] == [{'path': str(incomplete), 'reason': 'quality_incomplete',
+    assert result['excluded'] == [{'path': str(incomplete.parent), 'reason': 'quality_incomplete',
                                    'details': reasons}]
     with h5py.File(output) as data:
         assert data['data/demo_0'].attrs['source_episode'] == 'episode_test'

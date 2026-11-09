@@ -8,7 +8,87 @@
 
 ## 当前决定
 
+### 重复运行 Start-A 自动重启旧实例（2026-11-09，仅软件验证）
+
+**仅更新 A；本次需最后一次手动在旧 Start-A 窗口 Ctrl+C（旧代码没有停止接口），之后即可直接双击重启。** 用户要求打开 Start-A 时若已在运行则自动重启。
+原行为是复用旧实例并打开其页面。现改为：新进程拿不到配置锁时，通过已验证的本机实例（令牌鉴权）POST `/api/shutdown`；
+旧实例在**录制 / 处理中拒绝**（防止截断数据，新进程打印原因并退出），否则记录日志、停止 HTTP 服务、按原逻辑强制断开会话并释放相机 / 锁，
+旧窗口退出码 0 自动关闭；新进程每 0.3 s 重试拿锁，最多 45 s，拿到后正常启动并打开新页面（旧页面令牌失效）。
+旧实例无响应时不杀进程，提示到原窗口 Ctrl+C。注意：已连接的会话会被直接断开（与 Stop & disconnect 相同），需重新连接、校准。
+测试：`test_web_startup.py` 改写复用相关用例为重启用例（含两真实进程接管、录制中拒绝），与 `test_web.py` 共 29 条通过（未跑完整套件）。
+哈希前 12 位：`web_server.py` `f6812989ee45`、`web_instance.py` `879d4ed4dad0`。未在 ROG 带相机 / Quest 实测重启耗时。
+
+### Web 一键切换 Quest 无线 ADB（2026-11-09，仅软件验证）
+
+**仅更新并重启 A；B 无需更新，无需重校准。** 用户要求在 Web 界面加按键把 Quest 改为无线连接。
+Connections 卡片 Quest serial 旁新增 `Wireless` 按钮（动作 `wireless`）：Quest 须先经 USB 连接并已授权，A 依次执行
+`adb -s <USB序列号> shell ip -f inet addr show wlan0` 取 Wi-Fi IPv4 → `adb tcpip 5555` → 每秒 `adb connect IP:5555`（最多约 10 s），
+`adb devices` 显示 `IP:5555 device` 才算成功；随后自动填入并保存 `quest_serial=IP:5555`，USB 线可拔。
+只允许在未连接时执行（`tcpip` 会重启头显 adbd，会切断会话中的 Quest 输入），与 Find 互斥。
+新增 `devices.enable_wireless` / `quest_wifi_ip` 及 `test_devices.py` 4 条、`test_web.py` 1 条；相关测试 `test_devices` / `test_web` /
+`test_quest_connection` 通过（未跑完整套件）。哈希前 12 位：`devices.py` `49698aa25353`、`web_session.py` `da4fb879e416`、
+`web/app.js` `12d78e90fb06`、`web/index.html` `503252bf03c5`。
+**未用真实 Quest 验证**：无线下 ADB 时钟同步往返变大，可能触发 `ADB latency too high to verify input age` / `quest_stale`。
+Quest 重启后无线失效，需重新插 USB 再点一次。
+补充（同日）：按钮下方状态行改为按连接方式显示 `Quest (USB): …` / `Quest (Wi-Fi): …`（`QuestConnection` 新增 `link` 字段，序列号含 `:` 即 Wi-Fi，
+经 `/api/state` 的 `quest_link` 下发）；新增 `test_monitor_reports_link_type`。哈希：`quest_connection.py` `77424226a9d8`、
+`web_session.py` `92a6320dcf36`、`app.js` `bfe09cc35c80`、`index.html` `d9d42959f6e3`；`test_quest_connection` / `test_web` / `test_web_startup` 33 条通过。下一步：ROG 上真机点按钮，记录连接耗时、同步往返和 `quest_stale` 频率，决定无线是否可用于遥操。
+
+### 修复 `partial_frame_timeout` 误判断线（2026-11-09）
+
+**仅更新并重启 A；B 无需更新。** 上一条改动上线后，ROG 实测徽标显示 `B disconnected: receive_failed:partial_frame_timeout`。
+原因是 `transport.py` 读线程的半包计时：只有某次读完后缓冲区恰好为空才清零。B 持续高频发送 state（含 feedback stream）时，
+每次 recv 大多停在某帧中间，虽然帧一直在正常完成，计时却从不清零，0.5 s 后被误判为半包超时并断开。
+修复：计时只针对当前未完成的那一帧，本次读取完成了任意一帧就重新计时；真正卡住的半包（无任何帧完成）仍在 0.5 s 后断开。
+新增 `test_busy_stream_ending_reads_mid_frame_is_not_a_partial_timeout`：用旧逻辑跑会 WinError 10053 断线（复现），
+新逻辑通过；原有 `test_slow_partial_frame_does_not_occupy_connection_forever` 仍通过；完整测试通过。
+transport.py sha256 前 12 位 `76ae7ae06fd4`。B 的部署副本有相同读逻辑（B 接收 A 的小消息，触发概率低），本次未改 B。
+**未在 ROG 上验证。** 下一步：ROG 重启 A 复测；若改由 B 侧报断开，再同步此修复到 B。
+
+### B 连接频繁断开：ping 超时不再断线，断连原因可见（2026-11-09）
+
+**仅更新并重启 A；B 无需更新。** 现象：Web 上绿点 + "B disconnected"，即会话仍为 connected 但 A↔B 传输已关闭，
+界面看不到原因。代码排查发现：A 每 2 s 发 3 次时钟同步 ping，单次 0.3 s 未回就关闭整条连接（`request_timeout:ping`）；
+ROG 上 A/B/Gazebo 同机，B 偶尔卡顿即可触发，且同步线程随即退出。另一个问题：连接关闭后读线程报 "not a socket"
+会覆盖最初的断连原因。改动：
+- `client.py`：ping 超时只跳过该次采样、计入 `ping_timeouts`，不关闭连接；同步线程遇超时继续而非退出。
+  hold / arm 等其他请求仍保持超时即断开。持续无法同步仍会在 10 s 后由 `feedback_clock_sync_expired` 失效保护。
+- `transport.py`：连接已关闭后不再覆盖 `error`，保留最初原因（A 侧生效；B 部署副本本就落后于源码，未同步）。
+- `operator.py` / `web_session.py` / `app.js`：视图新增 `robot_disconnect_reason`；断开时徽标显示
+  "B disconnected: 原因" 并标红，事件日志记录一次 "B connection lost: 原因"。
+- 未改：发送 socket 超时 0.1 s（`send_failed:timed out`）、半包 0.5 s，二者影响控制时效，待看到实际原因再定。
+源码哈希（sha256 前 12 位）：client `229b4e98a222`、transport `401cd7e18675`、operator `6205b4e1c7f2`、
+web_session `e54c2a704a58`、app.js `f243e6dc0a27`。新增测试 `test_slow_ping_does_not_drop_b_connection`、
+`test_disconnect_reason_reaches_operator_view`、`test_lost_b_connection_is_logged_once_with_its_reason`；完整测试通过
+（其中一次完整运行 `test_dataset.py::test_export_excludes_quality_incomplete` 偶发失败，单独与重跑均通过，与本改动无关）。
+**未在 ROG 上验证**；页面 JS 本机无 node，未做语法检查。
+下一步：ROG 上重启 A，复现断连时记下徽标/事件日志里的原因；若为 `send_failed` 或 `peer_closed` 再针对处理。
+
+### 录制改为分文件夹原始数据，不再生成 raw.hdf5（2026-11-09，软件验证，实机待复验）
+
+**仅更新 A 并重启 Web A；B 无需更新。** 现场 `batch_20261109_180708` 第一段在 7.25 s 出现 `recording_queue_full`，
+相机、状态、反馈、命令、事件同时停止；A 主循环实际约 70 Hz（配置 120 Hz），说明 A 进程 CPU 饱和。
+11-07 只扩大了缓冲（约 3.6 s 图像），没有解决写入过慢：h5py 写入与 LZF 压缩持有 GIL，与控制、相机、预览线程争抢。
+用户决定：录制时不生成 HDF5，直接保存分文件夹的原始数据。
+
+- **新格式（schema 3，`storage_format=folder_raw_v1`）**：`states.jsonl`、`commands.jsonl`、`feedback_joint.jsonl`、
+  `feedback_pose.jsonl`、`events.jsonl`、`cameras/<name>/frames.rgb`（原始 RGB 逐帧追加，无损）+ `frames.jsonl` + `info.json`、
+  `manifest.json`（元数据、初始状态、质量、`complete`、`writer_stats`）。字段与 schema 2 相同，NaN 存为 null。
+- **mp4**：保存后由独立的 spawn 进程从 `frames.rgb` 生成 `cameras/<name>/video.mp4`，结果写 `videos.json`；失败不影响原始数据，
+  可用 `episode_store.make_videos(<episode>)` 重做。
+- **写入监测**：manifest `writer_stats` 记录队列最高水位、溢出时刻与当时积压、各类数据写入总耗时 / 最大耗时、忙碌比例。
+- **读取**：新增 `episode_store.open_episode()`，新文件夹和旧 `raw.hdf5` 用同一套接口读取；对齐索引改为读取时计算，不再存储。
+  `dataset.py` 导出、`motion_report` 已改用它；`scripts/` 下的旧迁移 / 评估脚本仍只读旧 HDF5。
+- **验证**：按现场负载回放 20 s（两路 640×480@20 fps，约 680 条/秒）：写入线程忙碌 5.3%（11-07 HDF5 版本约 43%），
+  队列最高 6 项、图像最高 1.8 MiB，`complete=true`、质量 `ok`；数据约 2.2 GB/分钟；mp4 20 s 数据转换 2.8 s、两路各 400 帧。
+  全套 pytest 999 通过 / 23 跳过 / 0 失败（之后修了 mp4 临时文件名并新增 mp4 后台生成测试，该测试单独通过）。
+  测试中注入写盘失败、关闭失败改为替换 `recording.open_file`；导出的 `excluded.path` 由 `raw.hdf5` 路径改为片段目录。
+- 下一步：重启 Web A，录一段完整 60 s 实机数据，检查 `writer_stats.busy_fraction`、`quality` 和 `videos.json`。
+
 ### Web 相机曝光 / 增益滑条（2026-11-09）
+
+> 同日用户要求暂时隐藏两路相机的滑条：仅在 `web/style.css` 末尾把 `.camera-controls` 设为 `display:none`，
+> 功能与已保存的相机参数不变；删除该规则即可恢复显示。重启 Web A（或刷新页面）生效。
 
 **仅更新并重启 A；B 无需更新。** 用户要求在 Web 上手动调两路相机的曝光和增益。每路画面下加 Exposure / Gain 滑条
 （RealSense 另有 Auto exposure），松手经 `camera_controls` 动作生效并写回 `operator.json`；录制中拒绝修改，保证同一条录制参数不变。

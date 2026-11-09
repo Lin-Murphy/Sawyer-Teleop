@@ -23,9 +23,9 @@
           <div class="form-grid">
             <label class="full">Backend<select id="backend" data-connection><option value="gazebo">Gazebo Simulation</option><option value="fake">Software Test</option><option value="intera">Real Sawyer</option></select></label>
             <label class="full">B address<input id="host" list="hostHistory" placeholder="127.0.0.1" maxlength="255" data-connection><datalist id="hostHistory"></datalist></label>
-            <label class="full">Quest serial<div class="input-action"><input id="serial" list="deviceList" placeholder="Auto-select a single authorized Quest" maxlength="255" data-connection><button id="scan" class="subtle">Find</button></div><datalist id="deviceList"></datalist></label>
+            <label class="full">Quest serial<div class="input-action"><input id="serial" list="deviceList" placeholder="Auto-select a single authorized Quest" maxlength="255" data-connection><button id="scan" class="subtle">Find</button><button id="wireless" class="subtle" title="With the Quest on USB: enable ADB over Wi-Fi, connect, and select it. Then the cable can be unplugged.">Wireless</button></div><datalist id="deviceList"></datalist></label>
           </div>
-          <p id="usb" class="hint">Quest USB: checking</p>
+          <p id="usb" class="hint">Quest: checking</p>
           <button id="connect" class="primary wide" disabled>Connect</button>
           <div class="separator"></div>
           <label class="check"><input type="checkbox" id="smoothing" data-connection> Smooth teleop</label>

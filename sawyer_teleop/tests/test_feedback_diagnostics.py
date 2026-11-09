@@ -186,3 +186,38 @@ def test_reproducible_delay_matrix():
     final = module.run_a250_matrix()
     assert len(final) == 16
     assert final == module.run_a250_matrix()
+
+
+def test_slow_ping_does_not_drop_b_connection(link):
+    _, client = link
+    sent, closed = [], []
+
+    class Silent:
+        closed = threading.Event()
+        error = None
+        def send(self, msg, clear_latest=False): sent.append(msg)
+        def close(self, error=None): closed.append(error)
+
+    client.connection = Silent()
+    with pytest.raises(TimeoutError):
+        client.sync_clock(2, timeout=.01)
+    assert len(sent) == 2 and not closed and client.ping_timeouts == 2
+    assert client.feedback_diagnostics()['connected']
+    # Other requests keep the fail-closed timeout.
+    with pytest.raises(TimeoutError):
+        client.request('hold', timeout=.01)
+    assert closed == ['request_timeout:hold']
+
+
+def test_disconnect_reason_reaches_operator_view(link, tmp_path):
+    _, client = link
+    client.connection.error = 'send_failed:timed out'
+    operator = Operator(client, SteppedQuest(), [], tmp_path)
+    try:
+        assert operator.view()['robot_disconnect_reason'] is None
+        client.connection.closed.set()
+        status = operator.view()
+        assert not status['robot_connected']
+        assert status['robot_disconnect_reason'] == 'send_failed:timed out'
+    finally:
+        operator.executor.shutdown(wait=True)

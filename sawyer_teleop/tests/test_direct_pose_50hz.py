@@ -16,6 +16,7 @@ from sawyer_teleop.intera_cartesian import InteraCartesian, cartesian_options
 from sawyer_teleop.protocol import ProtocolError
 from test_bridge import Clock
 from test_intera_cartesian import Trajectory
+from sawyer_teleop.episode_store import open_episode
 
 POSE = dict(p=[.5, .1, .3], q=[0., 0., 0., 1.])
 
@@ -289,7 +290,7 @@ def test_loopback_operator_bypasses_ik_records_pose_and_releases(tmp_path):
         submits=[x for x in events if x['reason']=='submitted_pose']
         assert submits and all('q' not in x['receipt'] for x in submits)
         import h5py
-        with h5py.File(ep.result/'raw.hdf5') as capture:
+        with open_episode(ep.result) as capture:
             assert len(capture['commands'])==0
             assert len(capture['states/ns'])>0
         assert ep.metadata['ik']['mode']=='bypassed'

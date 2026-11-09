@@ -7,12 +7,13 @@ from pathlib import Path
 import re
 import secrets
 import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 import webbrowser
 
 from .locking import ProcessLock
-from .web_session import SessionError, WebSession
-from .web_instance import config_key, existing_url, publish_instance, remove_instance
+from .web_session import SessionError, WebSession, recording_busy
+from .web_instance import config_key, existing_url, publish_instance, remove_instance, request_shutdown
 
 
 ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
@@ -159,6 +160,14 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == '/api/release':
                 self.server.session.release(client)
                 result = {'ok': True}
+            elif self.path == '/api/shutdown':
+                # A repeated Start-A replaces this instance; never cut an episode being recorded.
+                op = self.server.session.operator
+                if op is not None and recording_busy(op.view()):
+                    raise SessionError('Recording in progress. Save & End and wait for processing, then run Start-A again.')
+                self.server.session.log('Restart requested by a new Start-A; stopping this service.', 'warning')
+                threading.Thread(target=self.server.shutdown, name='web-shutdown', daemon=True).start()
+                result = {'ok': True}
             elif self.path == '/api/action':
                 result = self.server.session.command(client, body.get('seq'), body.get('action'), body.get('options', {}))
             else:
@@ -170,23 +179,40 @@ class Handler(BaseHTTPRequestHandler):
             self._respond(409, {'error': str(exc)})
 
 
+RESTART_WAIT_S = 45.  # Old session disconnect (≤20 s) plus camera / USB release.
+
+
+def _replace_running(config_path, lock, wait_s=RESTART_WAIT_S):
+    """Stop a verified running instance and take its lock. Returns True once acquired."""
+    accepted, error = request_shutdown(config_path)
+    if not accepted:
+        if error:
+            print('Web A is already running and refused to restart: '+error, flush=True)
+            return False
+        print('Web A is already running for this configuration but did not answer a restart request.\n'
+              'Press Ctrl+C in the original Start-A window. After it exits, run Start-A again.\n'
+              'No process or lock file was removed.', flush=True)
+        return False
+    print('Web A is already running. Stopping it to restart…', flush=True)
+    deadline = time.monotonic()+wait_s
+    while time.monotonic() < deadline:
+        try:
+            lock.acquire()
+            print('Previous Web A stopped. Starting a new one.', flush=True)
+            return True
+        except RuntimeError:
+            time.sleep(.3)
+    print('Previous Web A did not exit within %d s. Close its Start-A window, then run Start-A again.' % wait_s, flush=True)
+    return False
+
+
 def run_web(config_path, port=8780, open_browser=True):
     lock = ProcessLock('web-config:'+str(Path(config_path).resolve()))
     try:
         lock.acquire()
     except RuntimeError:
-        url = existing_url(config_path)
-        if url:
-            print('Web A is already running. Reusing the existing service.', flush=True)
-            print(url, flush=True)
-            if open_browser:
-                webbrowser.open(url)
-            return True
-        print('Web A is already running for this configuration. Use its existing browser page.\n'
-              'To load updated code, first Save & End and Disconnect, then press Ctrl+C in the\n'
-              'original Start-A window. After it exits, run Start-A again.\n'
-              'No process or lock file was removed.', flush=True)
-        return False
+        if not _replace_running(config_path, lock):
+            return False
     session = server = None
     try:
         session = WebSession(config_path)

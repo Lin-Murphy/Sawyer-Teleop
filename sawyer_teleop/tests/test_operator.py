@@ -5,6 +5,7 @@ from sawyer_teleop.client import RobotClient
 from sawyer_teleop.demo import SyntheticQuest, wait_until
 from sawyer_teleop.operator import Operator
 from sawyer_teleop.server import BridgeServer
+from sawyer_teleop.episode_store import open_episode
 
 
 @pytest.fixture
@@ -159,7 +160,7 @@ def test_explicit_end_saves_and_stops_all_continuation(running, tmp_path, stop_a
     assert operator.following and operator.saved_count == 1
     assert operator.episode is None and operator.review is None
     assert not operator.auto_recording and operator.next_record_at == 0
-    with h5py.File(episode.result/'raw.hdf5') as data:
+    with open_episode(episode.result) as data:
         assert data.attrs['complete']
         assert len(data['states/ns']) > 0
         assert len(data['commands/ns']) > 0

@@ -12,6 +12,7 @@ from sawyer_teleop.operator import Operator
 from sawyer_teleop.recording import Episode
 from test_quest import packet
 from test_ik_schedule import Robot
+from sawyer_teleop.episode_store import open_episode
 
 
 def reader(monkeypatch):
@@ -135,7 +136,7 @@ def test_engage_records_post_arm_feedback_and_exact_input_then_start_mid_segment
         reasons=[r['reason'] for r in rows]
         assert reasons.index('recording_started')<reasons.index('quest_capture_started')
         assert reasons.index('quest_capture_ended')<reasons.index('recording_ended')
-        with h5py.File(ep.result/'raw.hdf5') as data:assert data.attrs['complete']
+        with open_episode(ep.result) as data:assert data.attrs['complete']
         assert ep.metadata['quest_ingress_schema']==1
     finally:
         q.set_recording_sink(None)
@@ -157,6 +158,6 @@ def test_ingress_queue_overflow_remains_explicit_without_blocking_reader(tmp_pat
         q.set_recording_sink(None)
         ep.finish(True,{'capture_closed':True});gate.set()
         assert ep.done.wait(5)
-        with h5py.File(ep.result/'raw.hdf5') as data:assert not data.attrs['complete']
+        with open_episode(ep.result) as data:assert not data.attrs['complete']
     finally:
         gate.set()

@@ -926,6 +926,11 @@ dialog::backdrop {
 .camera-controls[hidden] {
   display:none
 }
+/* Temporarily hidden at the user's request (2026-11-09): exposure / gain sliders stay
+   implemented and saved settings still apply; delete this rule to show them again. */
+.camera-controls {
+  display:none
+}
 .camera-slider {
   display:grid;
   grid-template-columns:64px minmax(0,1fr) 64px;

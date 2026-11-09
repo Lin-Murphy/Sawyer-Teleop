@@ -11,7 +11,7 @@ import time
 from .cameras import CameraHub
 from .client import RobotClient
 from .connection_profiles import BACKENDS, DEFAULT_BACKEND, connection_ports
-from .devices import discover_quests
+from .devices import discover_quests, enable_wireless
 from .display_feedback import Posture, feedback_message
 from .input_status import expire_status
 from .motion_profiles import CARTESIAN_RATES, MOTION_PROFILES, selected_motion_profile, motion_profile_reason
@@ -78,11 +78,13 @@ class WebSession:
         self.job = 0
         self.worker = None
         self.pending_host = None
+        self.b_lost_logged = False
         self.profile_request = 0
         self.pending_profile = None
         self.devices = []
         self.scanning = False
         self.scan_worker = None
+        self.wireless = dict(running=False, serial=None, seq=0)
         self.posture = Posture()
         self.last_recording = None
         self.last_motion = 0.0
@@ -191,6 +193,13 @@ class WebSession:
             self.phase = 'connected' if state.get('robot_connected') else 'error'
         if state.get('mode') == 'error':
             self.phase = 'error'
+        if self.phase == 'connected' and not state.get('robot_connected'):
+            if not self.b_lost_logged:
+                self.b_lost_logged = True
+                self.log('B connection lost: '+str(state.get('robot_disconnect_reason') or 'unknown')
+                         +'. Disconnect, then connect again.', 'error')
+        else:
+            self.b_lost_logged = False
         result = state.get('motion_profile_result') or {}
         if self.pending_profile is not None and result.get('request_id') == self.pending_profile:
             self.pending_profile = None
@@ -223,6 +232,7 @@ class WebSession:
             state = self._refresh()
             state['quest'] = expire_status(state.get('quest', {}))
             defaults = self.defaults()
+            quest_adb = self.display.snapshot()
             backend = state.get('backend', defaults['backend'])
             profiles = []
             for key, (label, description) in MOTION_PROFILES.items():
@@ -241,8 +251,8 @@ class WebSession:
             return json_safe(dict(phase=self.phase, message=self.message, state=state, defaults=defaults,
                 owner=self.owner == client, occupied=self.owner is not None, lease_seconds=self.LEASE_SECONDS,
                 has_session=self.operator is not None,
-                pending_profile=self.pending_profile, usb=self.display.snapshot().get('usb'),
-                devices=self.devices, scanning=self.scanning, backends=BACKENDS, profiles=profiles,
+                pending_profile=self.pending_profile, usb=quest_adb.get('usb'), quest_link=quest_adb.get('link'),
+                devices=self.devices, scanning=self.scanning, wireless=dict(self.wireless), backends=BACKENDS, profiles=profiles,
                 events=[x for x in self.events if x['seq'] > after], event_seq=self.event_seq,
                 posture=posture, last_recording=self.last_recording, cameras=self.cameras.status()))
 
@@ -401,7 +411,7 @@ class WebSession:
         elif action in ('disconnect', 'stop_session'):
             self._disconnect(force=action == 'stop_session', reason='Stopped by operator' if action == 'stop_session' else 'Disconnected by operator')
         elif action == 'scan':
-            if self.scanning:
+            if self.scanning or self.wireless['running']:
                 raise SessionError('Device discovery is already running.')
             serial = options.get('serial') or None
             if serial is not None and (not isinstance(serial, str) or len(serial) > 255):
@@ -419,6 +429,33 @@ class WebSession:
                     with self.lock:
                         self.scanning = False
             self.scan_worker = threading.Thread(target=scan, daemon=True)
+            self.scan_worker.start()
+        elif action == 'wireless':
+            # `adb tcpip` restarts adbd and would cut a live session's Quest input.
+            if self.operator is not None or self.phase in ('connecting', 'disconnecting', 'connected'):
+                raise SessionError('Disconnect before switching the Quest to wireless.')
+            if self.wireless['running'] or self.scanning:
+                raise SessionError('Device discovery is already running.')
+            serial = options.get('serial') or None
+            if serial is not None and (not isinstance(serial, str) or len(serial) > 255):
+                raise SessionError('Invalid Quest serial.')
+            self.wireless['running'] = True
+            self.log('Switching Quest to wireless ADB…')
+            def wireless():
+                try:
+                    target = enable_wireless(self.config.get('adb', 'adb'), serial)
+                    with self.lock:
+                        self.devices = list(dict.fromkeys([target]+self.devices))
+                        self._save(quest_serial=target)
+                        self.display.set_serial(target)
+                        self.wireless.update(serial=target, seq=self.wireless['seq']+1)
+                        self.log('Quest wireless ADB ready: '+target+'. USB cable can be unplugged.')
+                except Exception as exc:
+                    self.log('Wireless switch failed: '+str(exc), 'warning')
+                finally:
+                    with self.lock:
+                        self.wireless['running'] = False
+            self.scan_worker = threading.Thread(target=wireless, daemon=True)
             self.scan_worker.start()
         elif action == 'apply_motion':
             profile = options.get('profile')

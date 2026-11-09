@@ -1,4 +1,4 @@
-"""USB authorization monitoring, independent of controller input."""
+"""ADB (USB or Wi-Fi) authorization monitoring, independent of controller input."""
 import shutil
 import subprocess
 import threading
@@ -11,7 +11,7 @@ class QuestConnection:
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.generation = 0
-        self.state = {"usb": "Checking USB"}
+        self.state = {"usb": "Checking USB", "link": None}
         self.thread = None
 
     def start(self):
@@ -24,7 +24,11 @@ class QuestConnection:
             if serial != self.serial:
                 self.serial = serial
                 self.generation += 1
-                self.state.update(usb="Checking selected Quest")
+                self.state.update(usb="Checking selected Quest", link=self._link(serial))
+
+    @staticmethod
+    def _link(serial):
+        return None if not serial else "Wi-Fi" if ":" in serial else "USB"
 
     def snapshot(self):
         with self.lock:
@@ -56,11 +60,12 @@ class QuestConnection:
                     if generation != self.generation:
                         continue
                     self.state["usb"] = usb
+                    self.state["link"] = self._link(row[0] if row else serial)
             except Exception as exc:
                 with self.lock:
                     if generation != self.generation:
                         continue
-                    self.state["usb"] = ("USB check timed out. Check the connection." if isinstance(exc, subprocess.TimeoutExpired)
+                    self.state["usb"] = ("ADB check timed out. Check the connection." if isinstance(exc, subprocess.TimeoutExpired)
                                          else "Check failed: "+str(exc)[:100])
             self.stop.wait(1)
 

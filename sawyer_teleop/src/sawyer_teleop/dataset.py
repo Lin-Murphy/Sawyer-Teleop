@@ -5,6 +5,8 @@ from pathlib import Path
 import tempfile
 
 import h5py
+
+from .episode_store import find_episodes, open_episode
 import numpy as np
 
 
@@ -31,11 +33,11 @@ def export_dataset(root, output, hz=50, valid_fraction=.2, seed=42):
     if output.exists():
         raise FileExistsError(output)
     step = round(1e9/hz)
-    candidates = sorted(Path(root).glob("episode_*/raw.hdf5"))
+    candidates = find_episodes(root)
     episodes = []
     excluded = []
     for path in candidates:
-        with h5py.File(path, "r") as source:
+        with open_episode(path) as source:
             if not source.attrs.get("complete", False):
                 excluded.append({"path": str(path), "reason": "incomplete"})
                 continue
@@ -60,7 +62,7 @@ def export_dataset(root, output, hz=50, valid_fraction=.2, seed=42):
     extrema = []
     source_backends = set()
     for path in episodes:
-        with h5py.File(path, "r") as source:
+        with open_episode(path) as source:
             metadata = json.loads(source.attrs["metadata"])
             source_backends.add(metadata.get("backend", "unknown"))
             q = source["commands/q"][:]
@@ -95,7 +97,7 @@ def export_dataset(root, output, hz=50, valid_fraction=.2, seed=42):
             split_names = {"train": [], "valid": []}
             for episode_index, path in enumerate(episodes):
                 split = "valid" if episode_index in validation else "train"
-                with h5py.File(path, "r") as source:
+                with open_episode(path) as source:
                     states, commands, frames = source["states"], source["commands"], source["frames"]
                     if "ns" not in states:
                         continue
@@ -155,7 +157,7 @@ def export_dataset(root, output, hz=50, valid_fraction=.2, seed=42):
                             done[-1] = 1  # Dataset boundary, not success.
                             demo.create_dataset("dones", data=done)
                             demo.attrs["num_samples"] = count
-                            demo.attrs["source_episode"] = path.parent.name
+                            demo.attrs["source_episode"] = path.name
                             # A demo is a slice of an episode; success belongs to the episode.
                             demo.attrs["task_success"] = "unknown"
                             demo.attrs["episode_task_success"] = (

@@ -14,6 +14,7 @@ from sawyer_teleop.operator import Operator
 from sawyer_teleop.protocol import ns
 from sawyer_teleop.quest import QuestValidator
 from sawyer_teleop.server import BridgeServer
+from sawyer_teleop.episode_store import open_episode
 
 
 def assert_orientation(actual, expected):
@@ -159,7 +160,7 @@ def test_stationary_hand_rotation_reaches_b_ui_and_hdf5_without_clutch_jump(tmp_
         wait_until(lambda: not operator.following)
         operator.request("end_recording")
         wait_until(lambda: operator.finishing is None and episode.result is not None)
-        with h5py.File(episode.result/"raw.hdf5") as data:
+        with open_episode(episode.result) as data:
             assert data.attrs["complete"]
             for name in ("states/q", "commands/q"):
                 assert np.all(np.max(np.abs(data[name][:, 4:7]), axis=0) > .3)
