@@ -8,6 +8,23 @@
 
 ## 当前决定
 
+### B 断开根因：状态帧超过 64 KiB（`send_failed:frame too large`）（2026-11-10）
+
+**需更新 B 并重启 B；A 无需改动（transport 两端共用，A 更新无害）。** 新版 B 记录到 17:58:53 断开原因
+`connection_closed: send_failed:frame too large`（事件 51，紧跟 Reset 到位）。原因：`BridgeCore.telemetry()` 每个 tick（100 Hz）
+都把最近 64 条事件全量发给 A；真机事件带诊断详情，每条约 0.85–1.6 KB（A 录制的 bridge_event 实测），事件累积到约 50 条后
+状态帧 + feedback stream 行超过 `MAX_FRAME` 64 KiB，`encode` 失败，B 写线程关闭连接（A 看到 `peer_closed`）。17:42 那次
+（事件 113）同理。原测试 `test_detailed_event_history_fits_protocol_frame` 只用 Fake 小事件，未覆盖真机尺寸。
+该全量重发也使 B→A 持续占用数 MB/s，很可能是上文 Wi-Fi 排队延迟的主要来源（待复测确认）。
+改动：
+- `bridge.py`：tick 发出的状态帧只带最近 `STATE_EVENT_LIMIT` = 8 条事件（A 按 seq 去重）；`diagnostics()`（monitor / B 日志）仍保留 64 条。
+- `feedback_stream.fit_frame` + `transport`：带 merge 字段（feedback_stream）的 latest 帧若仍超限，丢弃最旧的录制行并计入 `dropped`，
+  不再因录制旁路过大而断开控制链路；无行可丢仍超限才报错。
+新增测试 `test_tick_frame_carries_recent_events_only_and_fits_with_real_sized_details`、
+`test_oversized_merged_state_is_trimmed_not_disconnected`；test_dispatch / test_transport / test_bridge / test_feedback_stream /
+test_feedback_log / test_monitor / test_reset_arm / test_recording / test_intera_cartesian 通过。未在实验室 B 上验证。
+下一步：B `git pull` 并重启，A 重连后连续批量录制；对比 B→A 延迟 p95 是否明显下降。
+
 ### B 记录 A 连接断开原因（2026-11-10）
 
 **需更新 B 代码并重启 B；A 无需改动。** 现场：17:42:27 A 显示 `B connection lost: peer_closed`。B monitor：进程未重启

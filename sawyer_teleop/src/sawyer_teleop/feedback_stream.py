@@ -90,6 +90,30 @@ class FeedbackStreamSource:
         self.feedback_stream.clear()
 
 
+def fit_frame(message, field, encode):
+    """Encode ``message``; if too large, drop the oldest ``field`` rows (counted as dropped).
+
+    Recording rows are expendable but counted; the control link must never close because
+    the side channel grew. Raises only if the frame is too large even without rows.
+    """
+    try:
+        return encode(message)
+    except ValueError:
+        stream = message.get(field)
+        if not stream or not stream.get("rows"):
+            raise
+    rows = list(stream["rows"])
+    dropped = stream.get("dropped", 0)
+    while rows:
+        cut = max(1, len(rows)//2)
+        rows, dropped = rows[cut:], dropped+cut
+        try:
+            return encode(dict(message, **{field: dict(stream, rows=rows, dropped=dropped)}))
+        except ValueError:
+            continue
+    return encode(dict(message, **{field: dict(stream, rows=[], dropped=dropped)}))
+
+
 def merge_stream(previous, current, limit=MAX_ROWS_PER_MESSAGE):
     """Carry an unsent message's rows into its replacement (oldest rows dropped first)."""
     if not previous:

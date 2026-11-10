@@ -146,3 +146,29 @@ def test_client_reliable_hold_and_arm_still_preempt_latest_target():
     sink.sent = sent
     connection._write()
     assert received == [{'type':'hold'},{'type':'arm'},{'type':'target','seq':2}]
+
+
+def test_oversized_merged_state_is_trimmed_not_disconnected():
+    from sawyer_teleop.feedback_stream import fit_frame
+    rows = [{"kind": "joint", "stream_seq": i, "pad": "y" * 900} for i in range(120)]
+    msg = {"type": "state", "feedback_stream": {"rows": rows, "dropped": 2}}
+    with pytest.raises(ProtocolError):
+        encode(msg)
+    frame = fit_frame(msg, "feedback_stream", encode)
+    sent = Decoder().feed(frame)[0]["feedback_stream"]
+    assert sent["rows"] and sent["rows"][-1]["stream_seq"] == 119
+    assert sent["dropped"] == 2 + 120 - len(sent["rows"])
+
+    left, right = tcp_pair()
+    received = []
+    sender = Connection(left, lambda m: None).start()
+    receiver = Connection(right, received.append).start()
+    try:
+        sender.send(msg, latest="state", merge="feedback_stream")
+        deadline = time.monotonic() + 2
+        while not received and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert received and not sender.closed.is_set(), sender.error
+    finally:
+        sender.close()
+        receiver.close()

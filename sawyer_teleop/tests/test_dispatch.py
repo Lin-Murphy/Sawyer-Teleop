@@ -233,3 +233,14 @@ def test_a_uses_first_b_cause_returned_by_hold_even_with_stale_telemetry(tmp_pat
         assert 'simulation_source_time_invalid' in operator.view()['message']
         assert 'Latest robot feedback is invalid' in operator.view()['message']
     finally:operator.executor.shutdown(wait=True)
+
+
+def test_tick_frame_carries_recent_events_only_and_fits_with_real_sized_details():
+    from sawyer_teleop.bridge import STATE_EVENT_LIMIT
+    clock, _, core = make_core()
+    for i in range(64):
+        core._event('pause_%d' % i, {'diagnostics': 'x' * 1600})  # real-robot detail size
+    _, state = core.tick()
+    assert [e['reason'] for e in state['events']] == ['pause_%d' % i for i in range(64-STATE_EVENT_LIMIT, 64)]
+    assert len(encode(state)) < 20000
+    assert len(core.diagnostics()['events']) == 64  # monitor / journal keep full history

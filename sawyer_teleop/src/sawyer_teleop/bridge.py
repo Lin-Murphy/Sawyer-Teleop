@@ -26,6 +26,12 @@ def _log_stop_failure(reason, exc):
     sys.stderr.flush()
 
 
+
+# 2026-11-10: each state frame (100 Hz) used to resend all 64 detailed events (~1-1.6 KB each
+# on the real robot), exceeding the 64 KiB frame limit and closing A's connection. A dedups by
+# event seq, so the recent window is enough; the full history stays in B's monitor/journal.
+STATE_EVENT_LIMIT = 8
+
 class BridgeCore:
     def __init__(self, backend, state_timeout=0.1, command_timeout=0.2, clock=ns, control_hz=100, reference_timeout=.12):
         if not 0 < state_timeout <= command_timeout:
@@ -563,7 +569,7 @@ class BridgeCore:
                     else:
                         before = self.latest
                         if not self._submit_gripper(msg):
-                            return None, self.telemetry()
+                            return None, self.telemetry(STATE_EVENT_LIMIT)
                         self.backend.publish(msg["q"])
                         self.joint_output_anchor = list(msg["q"])
                         submitted_ns = self.clock()
@@ -584,7 +590,7 @@ class BridgeCore:
                             "gripper": msg.get("gripper"),
                         }
                 self.last_tick_ns = now if self.armed else None
-            return receipt, self.telemetry()
+            return receipt, self.telemetry(STATE_EVENT_LIMIT)
 
     def _poll_native_stop(self):
         try:
@@ -765,8 +771,13 @@ class BridgeCore:
             self._hold("joint_jump" if isinstance(exc, JointJumpError) else str(exc), target=msg, details=details)
             return None
 
-    def telemetry(self):
+    def telemetry(self, event_limit=None):
+        """``event_limit`` trims the event history for the per-tick network frame;
+        local monitor/journal callers keep the full history."""
         with self.lock:
+            events = list(self.events)
+            if event_limit is not None:
+                events = events[-event_limit:]
             return {
                 "type": "state", "session": self.session, "b_ns": self.clock(),
                 "sample": self.latest, "generation": self.generation,
@@ -785,7 +796,7 @@ class BridgeCore:
                 "scene_reset": dict(self.scene_reset) if self.scene_reset else None,
                 "counts": {"submitted": self.submitted, "rejected": self.rejected},
                 "submission_rate": self.submission_rate.snapshot(active=self.session is not None),
-                "events": list(self.events),
+                "events": events,
             }
 
     def diagnostics(self):

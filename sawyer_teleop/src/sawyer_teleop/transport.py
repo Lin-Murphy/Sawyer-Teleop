@@ -7,7 +7,7 @@ import time
 
 from .protocol import Decoder, ProtocolError, close_socket, configure_socket, encode
 from .rates import EventRate
-from .feedback_stream import merge_stream
+from .feedback_stream import fit_frame, merge_stream
 
 
 class Connection:
@@ -19,6 +19,7 @@ class Connection:
         self.capacity = capacity
         self.reliable = collections.deque()
         self.latest = {}
+        self.merge_fields = {}
         self.condition = threading.Condition()
         self.closed = threading.Event()
         self.error = None
@@ -41,6 +42,8 @@ class Connection:
                 self.latest.clear()
             if latest is not None:
                 previous = self.latest.get(latest)
+                if merge:
+                    self.merge_fields[latest] = merge
                 if merge and previous and previous.get(merge):
                     combined = merge_stream(previous[merge], msg.get(merge))
                     msg = dict(msg, **{merge: combined})
@@ -68,17 +71,21 @@ class Connection:
                     # B's receipts must stay lossless, but a continuous receipt
                     # stream must not starve its latest feedback. A's target
                     # slot still yields to every reliable hold/control request.
+                    field = None
                     if self.reliable and not (offer_state and "state" in self.latest):
                         msg = self.reliable.popleft()
                         offer_state = True
                     elif self.latest:
                         key = "state" if "state" in self.latest else next(iter(self.latest))
                         msg = self.latest.pop(key)
+                        field = self.merge_fields.get(key)
                         offer_state = False
                     else:
                         continue
                 # sendall has a finite deadline; buffered old bytes cannot be revoked.
-                self.sock.sendall(encode(msg))
+                # A merged recording side channel is trimmed (and counted) rather than
+                # letting an oversized frame close the control link.
+                self.sock.sendall(fit_frame(msg, field, encode) if field else encode(msg))
                 if msg.get("type") in ("target", "pose_target"):
                     self.target_sent.mark()
         except (OSError, ValueError) as exc:
