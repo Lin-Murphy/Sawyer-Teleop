@@ -297,9 +297,12 @@ class BridgeCore:
                 return None
             return {"schema": FEEDBACK_STREAM_SCHEMA, "rows": rows, "dropped": dropped}
 
-    def disconnect(self, session):
+    def disconnect(self, session, cause=None):
         with self.lock:
             if self.session == session:
+                if cause:
+                    # Transport-level cause (e.g. send_failed, partial_frame_timeout, peer_closed).
+                    self._event("connection_closed: " + str(cause))
                 self.feedback_stream_enabled = False
                 self.scene_cancel.set()
                 try:

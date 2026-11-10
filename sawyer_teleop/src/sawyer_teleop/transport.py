@@ -11,9 +11,10 @@ from .feedback_stream import merge_stream
 
 
 class Connection:
-    def __init__(self, sock, on_message, on_close=lambda: None, capacity=128):
+    def __init__(self, sock, on_message, on_close=lambda: None, capacity=128, timeout=0.1):
         self.sock = sock
-        configure_socket(sock)
+        # Also the sendall deadline: a send blocked longer than this closes the connection.
+        configure_socket(sock, timeout)
         self.on_message, self.on_close = on_message, on_close
         self.capacity = capacity
         self.reliable = collections.deque()

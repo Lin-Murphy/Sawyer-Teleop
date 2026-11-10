@@ -8,6 +8,39 @@
 
 ## 当前决定
 
+### B 记录 A 连接断开原因（2026-11-10）
+
+**需更新 B 代码并重启 B；A 无需改动。** 现场：17:42:27 A 显示 `B connection lost: peer_closed`。B monitor：进程未重启
+（PID 840128）、`Service error` 为空、最近事件 "Grip released → disconnected"，即 B 在传输层主动关闭，但 B 未记录原因。
+改动：`server.py` 在连接关闭时把 `Connection.error` 传给 `BridgeCore.disconnect(session, cause)`，B 事件追加
+`connection_closed: <原因>`（monitor 的 Recent events 可见），并向 B 终端 stderr 打印。transport 的两个修复
+（半包计时只针对当前帧、关闭后不覆盖原因）已在 main（a5e78df），B 需 `git pull` 到含该提交的版本才生效。
+用户随后决定：**B 控制连接的发送超时 0.1 s → 0.2 s**（`server.B_SEND_TIMEOUT_S`，经 `Connection(timeout=)` 传入；
+该值也是 B 收数据的轮询间隔，半包 0.5 s 判定不变；A 端仍为 0.1 s）。Wi-Fi 卡顿 0.1–0.2 s 时 B 不再断开，代价是 B 的发送线程
+最多阻塞 0.2 s，期间 A 收不到新反馈（A 自身 200 ms 新鲜度检查仍会 hold）。新增 `test_transport_close_cause_is_recorded_as_a_b_event`、
+`test_b_control_connection_uses_200ms_send_deadline`；test_bridge / test_transport / test_dispatch / test_monitor 通过。DEPLOYMENT 增加 monitor 查看命令。未在实验室 B 上验证。
+
+### 真机遥操频繁 `feedback_latest_expired` 的原因：A↔B Wi-Fi 排队延迟（2026-11-10，仅分析）
+
+**未改代码。** 现场：A（Windows 笔记本，Intel AX211 Wi-Fi）连实验室 B（backend `intera`，真机 `sawyer.local`，B 地址 10.101.119.182）。
+录制 `windows-local/data/batch_20261110_172345` 期间每秒左右一次 `feedback_latest_expired`，随后 feedback connection lost。
+数据结论：
+- 该原因由 B 报出：目标所依据的参考反馈年龄 124–153 ms，超过 B `reference_timeout_s` 120 ms；B 自身最新反馈只有 12–15 ms，真机反馈 100 Hz 无缺行。
+- B 打包到发送仅 2.5 ms；**B 发出 → A 收到**中位 24 ms，p95 87 ms，最大 116 ms。慢的时段里到达间隔仍约 10 ms 而无断档，
+  但延迟在约 0.5 s 内从 14 ms 逐步爬到 90 ms 再回落——这是链路排队（Wi-Fi 吞吐暂时下降），不是 A 进程卡死（那样会先断档再一次涌入）。
+- 同日其他批次：17:20 p95 19 ms、17:21 p95 33 ms（最大 133 ms）、17:23:09 p95 25 ms，波动大，与录制本身无明确关联。
+- A 写盘线程忙碌 15.7%，单项最大 20 ms，不构成瓶颈。此前"A 主循环卡顿"的判断作废：主循环事件间隙只是暂停后不记录造成的。
+- 空闲时 ping B 30 次：6–11 ms，无丢包。
+**更正（同日）**：该 B 实际报告 `reference_timeout_s` 0.25 / `command_timeout_s` 0.25 / `state_timeout_s` 0.1
+（Start-B-Real.sh 自 10-29 起即 250 ms），上文"超过 120 ms 参考时限"不成立。`feedback_latest_expired` 来自 **A** 的最新反馈检查：
+A 端反馈年龄超过 `operator.json` 的 `state_timeout_s` 0.1 s 即 hold B，并以此为原因（B 事件里的 reason 是 A 的 hold 原因）。
+B→A 延迟最大 116 ms，正好越过 100 ms。
+**用户决定放宽到 200 ms**：`config/operator.json` 与本机 `windows-local/config/operator.json` 的 `state_timeout_s` 0.1 → 0.2
+（仅 A，重启 A 生效；本机配置不在 git 中）。该值同时用于 A 端 arm 确认等待和录制开始时的反馈新鲜度要求。
+B 的独立保护不变：参考 250 ms、指令 250 ms、B 自身最新反馈 100 ms。代价：网络慢时手臂可能按至多约 200 ms 前的状态继续执行，
+表现为偶发滞后而不是暂停。相关测试 test_web / test_web_startup / test_feedback_diagnostics 通过。未在真机上复测。
+下一步：重启 A 复测同样的录制，看 expired 次数；有线连接仍是根本改善。
+
 ### 批量录制下一条开始时不再检查 Quest 输入（2026-11-09）
 
 **仅更新并重启 A。** ROG 实测：批量间隔结束时人稍一移动（头显/手柄瞬时跟丢）即报

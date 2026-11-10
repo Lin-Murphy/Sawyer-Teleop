@@ -251,6 +251,18 @@ PollIntervalMinSec=16s，PollIntervalMaxSec=32s。NTP不是deploy的一部分。
 【粘贴页面报错、B启动输出、timesync-status和最新反馈日志】
 ```
 
+## 查看 B 状态与断连原因（2026-11-10）
+
+B 运行时在另一个终端只读查看（在仓库根目录 `~/Lin/sawyer-teleop` 下；直接用 `python3 -m` 会因缺少 PYTHONPATH 找不到模块）：
+
+```bash
+PYTHONPATH=sawyer_teleop/src python3 -m sawyer_teleop.cli monitor --status-file /dev/shm/sawyer-teleop-$(id -u)/intera-b.json --once
+```
+
+`Service error` 非空表示 B 执行出错；为空而 A 显示 `peer_closed` 时看 `Recent events`：
+更新后的 B 在断开前会记一条 `connection_closed: <原因>`，B 终端也打印 `A connection closed: <原因>`。
+常见原因：`send_failed:timed out`（B 向 A 发送卡住超过 0.2 s，多为 Wi-Fi；2026-11-10 起由 0.1 s 放宽）、`receive_failed:partial_frame_timeout`、`peer_closed`（A 主动断开）。
+
 ## Quest 无线连接（可选，2026-11-09，未经真机验证）
 
 1. Quest 与 A 电脑连同一网络；Quest 先用 USB 连 A，并在头显里允许 USB 调试。

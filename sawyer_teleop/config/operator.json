@@ -3,7 +3,7 @@
   "robot_host": "127.0.0.1",
   "control_port": 8875,
   "ik_port": 8876,
-  "state_timeout_s": 0.1,
+  "state_timeout_s": 0.2,
   "operator_hz": 120,
   "position_scale": 1.0,
   "motion": {

@@ -1,5 +1,6 @@
 """B-side two-port service. No dataset or video dependencies."""
 import socket
+import sys
 import collections
 import threading
 import time
@@ -8,6 +9,8 @@ from .bridge import BridgeCore
 from .joint_protection import check_jump, JointJumpError
 from .protocol import VERSION, ProtocolError, close_socket, configure_socket, encode, ns, pose, vector, integer
 from .transport import Connection, read_one
+
+B_SEND_TIMEOUT_S = 0.2
 
 
 class BridgeServer:
@@ -111,8 +114,12 @@ class BridgeServer:
                     conn.send({"type": "reply", "id": msg.get("id"),
                                "ok": False, "error": str(exc)})
 
-            conn = Connection(sock, receive,
-                              on_close=lambda: self.core.disconnect(session))
+            def closed():
+                print("A connection closed: " + str(conn.error or "unknown"), file=sys.stderr, flush=True)
+                self.core.disconnect(session, conn.error or "unknown")
+
+            # 2026-11-10: B->A send deadline 0.2 s (was 0.1) so a brief Wi-Fi stall does not drop A.
+            conn = Connection(sock, receive, on_close=closed, timeout=B_SEND_TIMEOUT_S)
             self.owner = conn
             conn.start()
             while not self.stop.wait(.1) and not conn.closed.is_set():
