@@ -11,7 +11,7 @@ import time
 from .cameras import CameraHub
 from .client import RobotClient
 from .connection_profiles import BACKENDS, DEFAULT_BACKEND, connection_ports
-from .devices import discover_quests, enable_wireless
+from .devices import discover_quests, enable_wireless, usb_fallback
 from .display_feedback import Posture, feedback_message
 from .input_status import expire_status
 from .motion_profiles import CARTESIAN_RATES, MOTION_PROFILES, selected_motion_profile, motion_profile_reason
@@ -350,6 +350,7 @@ class WebSession:
         job = self.job
         def connect():
             try:
+                self._fall_back_to_usb(settings, job)
                 op = self.operator_factory(settings)
                 with self.lock:
                     if job != self.job or self.closed.is_set() or self.owner is None:
@@ -366,6 +367,28 @@ class WebSession:
         self.worker = threading.Thread(target=connect, name='web-connect', daemon=True)
         self.worker.start()
         self.log('Connecting to '+settings['backend']+' · '+settings['host'])
+
+    def _fall_back_to_usb(self, settings, job):
+        """A saved Wi-Fi serial that is offline must not block a Quest plugged in by USB."""
+        try:
+            usb = usb_fallback(self.config.get('adb', 'adb'), settings['serial'])
+        except Exception as exc:
+            self.log('Wi-Fi check skipped: '+str(exc), 'warning')
+            return
+        if not usb:
+            return
+        with self.lock:
+            if job != self.job:
+                return
+            self.log('Quest Wi-Fi address %s is offline; using USB %s instead.' % (settings['serial'], usb), 'warning')
+            settings['serial'] = usb
+            try:
+                self._save(quest_serial=usb)
+            except OSError as exc:
+                self.log('Could not save the USB serial: '+str(exc), 'warning')
+            self.display.set_serial(usb)
+            # Same channel as the Wireless button: the page copies this serial into its field.
+            self.wireless.update(serial=usb, seq=self.wireless['seq']+1)
 
     def _disconnect(self, force=False, reason='Disconnected by operator'):
         if self.phase == 'disconnecting':

@@ -305,3 +305,18 @@ def test_wireless_switch_selects_and_saves_serial_and_is_blocked_while_connected
     connect(s, seq=2)
     result = s.command(OWNER, 3, 'wireless', {})
     assert not result['ok'] and 'Disconnect' in result['error']
+
+
+def test_connect_with_offline_wifi_serial_uses_usb_and_updates_page(web, monkeypatch):
+    s, _, _, root = web
+    seen = []
+    monkeypatch.setattr('sawyer_teleop.web_session.usb_fallback',
+                        lambda adb, serial: 'USBQ' if serial == '10.0.0.7:5555' else None)
+    factory = s.operator_factory
+    s.operator_factory = lambda settings: (seen.append(settings['serial']), factory(settings))[1]
+    assert s.command(OWNER, 1, 'connect', {'backend': 'fake', 'host': '127.0.0.1', 'serial': '10.0.0.7:5555'})['ok']
+    until(s, lambda snap: snap['phase'] == 'connected')
+    snap = s.snapshot(OWNER)
+    assert seen == ['USBQ'] and snap['wireless']['serial'] == 'USBQ'
+    assert json.loads((root/'operator.json').read_text())['quest_serial'] == 'USBQ'
+    assert any('offline; using USB USBQ' in e['text'] for e in snap['events'])

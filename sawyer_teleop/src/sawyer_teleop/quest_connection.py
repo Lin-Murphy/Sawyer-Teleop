@@ -56,6 +56,10 @@ class QuestConnection:
                     row = authorized[0] if len(authorized) == 1 else None
                 authorized = bool(row and len(row)>1 and row[1] == "device")
                 usb = "Authorized · " + row[0] if authorized else ("Selected Quest not detected" if row is None else "Not ready · " + " ".join(row[1:]))
+                if not authorized and serial and ":" in serial:
+                    wired = [r[0] for r in entries if len(r)>1 and r[1] == "device" and ":" not in r[0]]
+                    if len(wired) == 1:
+                        usb = "Wi-Fi address offline · Connect will use USB " + wired[0]
                 with self.lock:
                     if generation != self.generation:
                         continue

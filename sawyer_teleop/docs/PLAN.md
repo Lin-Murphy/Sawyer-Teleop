@@ -1,6 +1,6 @@
 # 项目状态
 
-更新：2026-11-09。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
+更新：2026-11-10。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
 
 > 2026-10-29 发布整理：Windows 入口合并为仓库根目录的 `Setup.cmd` / `Start-A.cmd` / `Start-B.cmd` / `Test.cmd`；
 > 文档合并为 SETUP / USAGE / TROUBLESHOOTING / DEVELOPMENT。下文历史条目里的旧脚本名（Install-Dev、Test-A、Stop-B、Install-Quest 等）、
@@ -37,6 +37,39 @@ test_feedback_log / test_monitor / test_reset_arm / test_recording / test_intera
 最多阻塞 0.2 s，期间 A 收不到新反馈（A 自身 200 ms 新鲜度检查仍会 hold）。新增 `test_transport_close_cause_is_recorded_as_a_b_event`、
 `test_b_control_connection_uses_200ms_send_deadline`；test_bridge / test_transport / test_dispatch / test_monitor 通过。DEPLOYMENT 增加 monitor 查看命令。未在实验室 B 上验证。
 
+### 抽屉放方块数据合并（2026-11-10）
+
+**仅移动数据，未改代码，A/B 无需更新。** `batch_20261110_173719`（6 条）与 `batch_20261110_175446`（6 条）合并为
+`windows-local/data/batch_20261110_drawer_cube`（12 条，283.7 s，10,684,342,476 B 录制数据与合并前两批之和一致）。
+合并前核对：任务名、motion_profile standard、IK 模型 sha256 1794f7c0…、轨迹限速/加速度、运动学、neutral、两路相机型号与设置均相同；
+12 条全部 complete、task_success、quality ok、无 recording_error。差异仅 `mapping`（两批间重新做了 Quest 朝向标定；动作是机器人系绝对关节目标，不受影响）、
+B 重启（session / generation 不同）、相机驱动累计计数与实测帧率。读取代码不使用 batch.json，录制目录名唯一。
+录制目录原样移动（同盘改名，未复制），各 manifest 的 `batch.name` 仍是原批次；原两个 batch.json 保存为 `source_<原批次>.json`，
+新 batch.json 记 count/saved 12 和 `merged_from`。合并前 173719 里那条 10.3 s 的录制已不在（非本会话删除）。
+项目自带 Python 用 `open_episode` 试读首尾两条正常。
+同日追加 `batch_20261110_180724`（12 条，22.45–35.02 s，全部 complete / task_success / quality ok）：按用户要求先查小于 15 s 的录制，
+180724 与已合并 12 条均无（最短分别 22.45 s、19.92 s），未删除任何录制。配置差异仍只有 `mapping`（又一次朝向标定）和 B session；
+其余字段（含相机设置）与前两批一致。移入后 `batch_20261110_drawer_cube` 共 24 条、604.9 s，原 batch.json 存为 `source_batch_20261110_180724.json`，
+新 batch.json 的 count/saved/saved_seconds/merged_from 已更新；`open_episode` 试读 180724 首尾两条正常。
+同日再追加 `batch_20261110_181811`（6 条，22.42–31.78 s，全部 complete / task_success / quality ok，无小于 15 s，未删除；配置与已合并数据一致，B session 同 180724）。
+已移入 5 条；最后一条 `episode_20261110T182318_0650508166fd` 移动时 Windows 报 Permission denied（重试仍失败），疑为仍在运行的 A（python pid 18460）
+或资源管理器占用该最新录制；文件本身完整（manifest、两路 frames.rgb / video.mp4 齐全），留在原目录，未强行结束 A。
+合并目录 batch.json 已按实际 29 条、735.6 s 更新；`batch_20261110_181811/` 暂留该条和原 batch.json，待关闭占用后再移入并改名为 `source_batch_20261110_181811.json`。
+用户关闭 A 后同日移入该条，原 batch.json 存为 `source_batch_20261110_181811.json`，空目录已删。合并目录现为 30 条、760.4 s、最短 19.92 s，
+四个来源批次 6 / 6 / 12 / 6 条；全部 complete / task_success / quality ok / 无 recording_error；`open_episode` 试读 182318 正常。
+教训：移动最新录制前先关闭 A，否则可能被占用。
+
+### 本机数据集清理（2026-11-10）
+
+**仅删除数据，未改代码，A/B 无需更新。** 用户要求“删除失败的 batch_20261110_173719、小于 10 s 的录制”，本意是只清理 173719 批次内部；
+执行时误解为跨批次，经确认后永久删除（`rm -rf`，不进回收站，本机未找到副本，无法恢复）：
+- 173719 内 5.4 s 的 `episode_20261110T173832_5c43c5bf5827` —— 符合本意。
+- **误删** `batch_20261110_172345` 整批（59.35 s，`complete=False`，约 2.2 GB；下方 Wi-Fi 延迟分析的原始录制，结论仅保留在本页）。
+- **误删** `batch_20261110_172309` 整批（仅一条 3.44 s 录制）。
+复查 173719：剩 7 条，均 `complete=True`、`task_success=True`（operator_saved）、quality ok、无 recording_error，最短 10.3 s；
+batch.json 记录的 3 次 discarded 尝试录制时就未落盘，批次内已无失败录制可删。batch.json 未改（仍写 saved 8，实际 7 条）。
+教训：删除范围有歧义时先按字面最窄范围确认，再动其他批次。
+
 ### 真机遥操频繁 `feedback_latest_expired` 的原因：A↔B Wi-Fi 排队延迟（2026-11-10，仅分析）
 
 **未改代码。** 现场：A（Windows 笔记本，Intel AX211 Wi-Fi）连实验室 B（backend `intera`，真机 `sawyer.local`，B 地址 10.101.119.182）。
@@ -57,6 +90,17 @@ B→A 延迟最大 116 ms，正好越过 100 ms。
 B 的独立保护不变：参考 250 ms、指令 250 ms、B 自身最新反馈 100 ms。代价：网络慢时手臂可能按至多约 200 ms 前的状态继续执行，
 表现为偶发滞后而不是暂停。相关测试 test_web / test_web_startup / test_feedback_diagnostics 通过。未在真机上复测。
 下一步：重启 A 复测同样的录制，看 expired 次数；有线连接仍是根本改善。
+
+### 无线地址失效时 Connect 自动回退 USB（2026-11-10）
+
+**仅更新并重启 A；B 无需更新。** 现场问题：用热点切过无线后 `quest_serial` 保存为 `192.168.137.220:5555`；热点关闭后 Quest 换到
+`192.168.1.149`（A 在 `10.70.67.150`，不同网络），页面一直 “Selected Quest not detected”，USB 插着也连不上（adb 实际可见 USB `2G0YC5ZG9X01Z4`）。
+改动：`devices.usb_fallback` —— 选中的是 Wi-Fi 序列号、`adb devices` 中不在线、且恰好一台已授权 USB Quest 时返回该 USB 序列号；
+Connect 工作线程在建 Operator 前调用，回退时写日志（warning）、保存 `quest_serial`、更新状态监视并把序列号回填到页面输入框；
+多台 USB 或 Wi-Fi 在线时不替换。状态行在回退条件成立时提示 `Wi-Fi address offline · Connect will use USB <序列号>`。
+测试：新增 `test_devices` 2 条、`test_quest_connection` 1 条、`test_web` 1 条，三文件共通过（未跑完整套件）；
+真实 adb 只读调用 `usb_fallback('adb','192.168.137.220:5555')` 返回 `2G0YC5ZG9X01Z4`。
+哈希前 12 位：`devices.py` `0be0b3e1f57a`、`web_session.py` `38daf2fd9fcc`、`quest_connection.py` `1867ad77ab60`。未提交。
 
 ### 批量录制下一条开始时不再检查 Quest 输入（2026-11-09）
 

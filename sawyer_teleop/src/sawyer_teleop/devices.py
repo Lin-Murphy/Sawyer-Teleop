@@ -72,6 +72,27 @@ def enable_wireless(adb='adb', serial=None, port=WIRELESS_PORT, wait_s=10., slee
                                % (target, last[:200] or 'no response'))
 
 
+def usb_fallback(adb='adb', serial=None):
+    """USB serial to use when the selected Wi-Fi Quest is offline, else None.
+
+    Only when exactly one authorized Quest is attached by USB, so the device is unambiguous.
+    """
+    if not is_wireless(serial):
+        return None
+    online = set()
+    for line in _runner(adb)(['devices']).splitlines()[1:]:
+        parts = line.split()
+        if len(parts) > 1 and parts[1] == 'device':
+            online.add(parts[0])
+    if serial in online:
+        return None
+    try:
+        usb = [s for s in discover_quests(adb) if not is_wireless(s)]
+    except RuntimeError:
+        return None
+    return usb[0] if len(usb) == 1 else None
+
+
 def discover_quests(adb='adb', preferred=None):
     run = _runner(adb)
     candidates = []

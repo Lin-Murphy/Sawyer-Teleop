@@ -37,3 +37,17 @@ def test_monitor_reports_link_type(monkeypatch, serial, link):
         assert monitor.snapshot()["link"] == link
     finally:
         monitor.close()
+
+
+def test_monitor_says_connect_will_use_usb_when_wifi_offline(monkeypatch):
+    monitor = QuestConnection("192.168.137.220:5555")
+    out = "List of devices attached"+chr(10)+"USBQ"+chr(9)+"device"+chr(10)
+    monkeypatch.setattr(monitor, "_command", lambda args: subprocess.CompletedProcess(args, 0, out.encode(), b""))
+    monitor.start()
+    try:
+        deadline = time.monotonic()+2
+        while "USB" not in monitor.snapshot()["usb"] and time.monotonic()<deadline:
+            time.sleep(.01)
+        assert monitor.snapshot()["usb"] == "Wi-Fi address offline · Connect will use USB USBQ"
+    finally:
+        monitor.close()

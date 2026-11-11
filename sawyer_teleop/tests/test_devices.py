@@ -76,3 +76,29 @@ def test_enable_wireless_needs_wifi_address(monkeypatch):
     monkeypatch.setattr('sawyer_teleop.devices.quest_wifi_ip', lambda _: None)
     with pytest.raises(RuntimeError, match='Wi-Fi address'):
         enable_wireless(sleep=lambda _: None)
+
+
+from sawyer_teleop.devices import usb_fallback
+
+
+def listing(monkeypatch, plain, detailed):
+    def run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 0, detailed if '-l' in cmd else plain, '')
+    monkeypatch.setattr('sawyer_teleop.devices.shutil.which', lambda _: 'adb')
+    monkeypatch.setattr('sawyer_teleop.devices.subprocess.run', run)
+
+
+def test_offline_wifi_serial_falls_back_to_single_usb_quest(monkeypatch):
+    listing(monkeypatch, 'List of devices attached\nUSBQ\tdevice\n',
+            'List of devices attached\nUSBQ device model:Quest_3\n')
+    assert usb_fallback(serial='192.168.137.220:5555') == 'USBQ'
+    assert usb_fallback(serial='USBQ') is None  # USB selection is never rewritten.
+
+
+def test_online_wifi_or_ambiguous_usb_is_not_replaced(monkeypatch):
+    listing(monkeypatch, 'List of devices attached\n10.0.0.7:5555\tdevice\nUSBQ\tdevice\n',
+            'List of devices attached\n10.0.0.7:5555 device model:Quest_3\nUSBQ device model:Quest_3\n')
+    assert usb_fallback(serial='10.0.0.7:5555') is None
+    listing(monkeypatch, 'List of devices attached\nA\tdevice\nB\tdevice\n',
+            'List of devices attached\nA device model:Quest_3\nB device model:Quest_3\n')
+    assert usb_fallback(serial='10.0.0.7:5555') is None
