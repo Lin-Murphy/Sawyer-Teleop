@@ -11,6 +11,7 @@
 | [PLAN](PLAN.md) | 项目状态：已完成、未验收、下一步（唯一进度入口） |
 | [JOINT_PROTECTION](JOINT_PROTECTION.md) | 关节跳变保护的规则与阈值依据 |
 | [ROBOT_VIEW](ROBOT_VIEW.md) | 网页三维姿态面板 |
+| [CAMERA_COMPARE](CAMERA_COMPARE.md) | 独立 Ubuntu 桌面相机比对：安装、训练参考帧、叠加、截图 |
 
 ## 专项参考
 

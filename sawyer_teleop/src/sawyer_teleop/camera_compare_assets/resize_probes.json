@@ -1,0 +1,11 @@
+{
+  "reference_pillow": "11.2.1",
+  "resize_source_sha256": "d48b4bd7f44e79fe6db8a8e07c9161144fa250be686e1245014a8b47e6171977",
+  "rgb640x480_seed_to_output_sha256": {
+    "0": "fea1f5cec42a2a9dd4d53ce5d48470656ff8dbadf8101418fd564654791c8f6a",
+    "1": "a9e7fabba904e4c28b4839e1a256faeb793f1f34cb5fb8b44d2ad1d08d026ae7",
+    "7": "e12e3cc9dd556e14c9152648436a6c4fb87454f48602d07f90629a6776efc3c5",
+    "42": "2c596896a492ee4193bce0d02ffef8e2eadd4b97d691fa5bd6393908e4b56bca",
+    "20261119": "6ed9852aae521aeaa013e4d910f6767cce26a2e92eb9c9a65c0e4ce9144f0b65"
+  }
+}

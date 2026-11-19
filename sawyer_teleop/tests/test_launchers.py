@@ -106,6 +106,48 @@ def test_real_check_never_connects_to_ros_or_starts_bridge(lab):
     assert not Path(env['BRIDGE']).exists()
 
 
+@pytest.mark.parametrize('override_network', [False, True])
+def test_camera_compare_dispatch_preserves_arguments_and_network(lab, tmp_path, override_network):
+    config, env, _ = lab
+    python = executable(tmp_path / 'compare python', '#!' + sys.executable + '\n' + '''
+import json, os, sys
+if sys.argv[1:3] == ['-m', 'sawyer_teleop.camera_compare']:
+    print(json.dumps({'args': sys.argv[1:], 'master': os.environ['ROS_MASTER_URI'],
+                      'ros_ip': os.environ['ROS_IP'], 'hostname': os.environ.get('ROS_HOSTNAME'),
+                      'source': os.environ['PYTHONPATH'], 'local': os.environ['SAWYER_LOCAL_HOME']}))
+else:
+    os.execv(''' + repr(sys.executable) + ''', [''' + repr(sys.executable) + ''', *sys.argv[1:]])
+''')
+    env = dict(env, SAWYER_REAL_CONFIG=str(config), SAWYER_CAMERA_COMPARE_PYTHON=str(python),
+               SAWYER_LOCAL_HOME=str(tmp_path / 'local home'))
+    env.pop('ROS_MASTER_URI', None)
+    env.pop('ROS_IP', None)
+    if override_network:
+        env.update(ROS_MASTER_URI='http://custom.test:11311', ROS_IP='192.0.2.99')
+    args = ['--frame-mode', 'first', '--demo', '6', '--output', str(tmp_path / 'my snapshots')]
+    result = run(ROOT / 'scripts/ubuntu/Start-Camera-Compare.sh', *args, env=env)
+    assert result.returncode == 0, result.stderr
+    dispatched = json.loads(result.stdout)
+    assert dispatched['args'] == ['-m', 'sawyer_teleop.camera_compare', *args]
+    assert dispatched['master'] == ('http://custom.test:11311' if override_network else 'http://robot.test:11311')
+    assert dispatched['ros_ip'] == ('192.0.2.99' if override_network else '192.0.2.10')
+    assert dispatched['hostname'] is None
+    assert str(ROOT / 'src') in dispatched['source'].split(os.pathsep)
+    assert dispatched['local'] == env['SAWYER_LOCAL_HOME']
+    assert not Path(env['TRACE']).exists()
+    assert not Path(env['BRIDGE']).exists()
+
+
+def test_camera_compare_missing_workspace_is_actionable(lab):
+    config, env, write = lab
+    write(SAWYER_WORKSPACE='/missing/compare/workspace')
+    env = dict(env, SAWYER_REAL_CONFIG=str(config), SAWYER_CAMERA_COMPARE_PYTHON=sys.executable)
+    result = run(ROOT / 'scripts/ubuntu/Start-Camera-Compare.sh', env=env)
+    assert result.returncode != 0
+    assert 'Missing built workspace' in result.stderr
+    assert not Path(env['TRACE']).exists()
+
+
 def test_real_dispatch_has_lab_network_and_standard_limits(lab):
     config, env, _ = lab
     result = run(REAL, '--config', config, env=env)

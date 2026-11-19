@@ -18,17 +18,29 @@ operator = [
   # Wrist camera (Sonix SN9C201) via inbox WinUSB; Windows has no signed vendor driver.
   "libusb1==3.4.0; platform_system == 'Windows'",
 ]
+camera-compare = [
+  "numpy==1.24.4",
+  "scipy==1.10.1",
+  "opencv-python==4.8.1.78",
+  "Pillow>=10.4,<12",
+]
 test = ["pytest>=7,<9"]
 gripper = ["dynamixel-sdk"]
 
 [project.scripts]
 sawyer-teleop = "sawyer_teleop.cli:main"
+sawyer-camera-compare = "sawyer_teleop.camera_compare:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-sawyer_teleop = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg"]
+sawyer_teleop = [
+  "web/*.html", "web/*.css", "web/*.js", "web/*.svg",
+  "camera_compare_assets/capture.c",
+  "camera_compare_assets/reference.py",
+  "camera_compare_assets/resize_probes.json",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

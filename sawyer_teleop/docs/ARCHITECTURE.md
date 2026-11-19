@@ -38,6 +38,7 @@ flowchart LR
 | B 轨迹 | `trajectory`、`motion_profiles` | 受限协调轨迹；选项只选择现有参数 |
 | B 适配 | `gazebo_backend`、`gazebo_scene`、`intera_backend`、`intera_cartesian`、`backends` | 仿真/真机/软件反馈与执行；Gazebo 场景还原 |
 | 数据 | `recording`、`cameras`、`dataset`、`motion_report` | 有界异步写盘、导出、只读分析 |
+| 独立相机比对 | `camera_compare`、`camera_compare_assets/` | Ubuntu 桌面窗口、只读 ROS 反馈、双路 RGB、SSH 训练帧缓存与差异截图；独立进程运行 |
 | 策略 | `policy_env`、`robomimic_env` | 独立 Gazebo 策略接口，不在普通遥操路径加载训练依赖 |
 | 诊断/规则 | `monitor`、`feedback_log`、`feedback_diagnostics`、`pause`、`a_timing`、`neutral`、`gripper` | 有界状态快照/持久反馈和实际方案、时间/暂停说明、回中和夹爪约定 |
 

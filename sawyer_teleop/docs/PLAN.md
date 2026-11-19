@@ -1,12 +1,19 @@
 # 项目状态
 
-更新：2026-11-10。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
+更新：2026-11-19。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
 
 > 2026-10-29 发布整理：Windows 入口合并为仓库根目录的 `Setup.cmd` / `Start-A.cmd` / `Start-B.cmd` / `Test.cmd`；
 > 文档合并为 SETUP / USAGE / TROUBLESHOOTING / DEVELOPMENT。下文历史条目里的旧脚本名（Install-Dev、Test-A、Stop-B、Install-Quest 等）、
 > 旧文档名和 `rog-local/`、`windows-local/artifacts/` 证据链接均指整理前的原作者本机环境，未随仓库发布。
 
 ## 当前决定
+
+### 推理前双相机参考对比（2026-11-19）
+
+**仅新增 Ubuntu 操作端入口。** 使用 `Start-Camera-Compare.sh` 独立查看实时双路 RGB 和训练帧，按原始示范 01–30 选择首帧、末帧或姿态最近帧，并查看 50% 叠加和差异热图。工具只读取相机和 ROS 反馈，B 无需升级、重启或重新校准。参考缓存和截图保存在本机。已用真实训练帧及保存的实拍画面验证界面切换、跨分段首尾帧和缺帧状态。本次移植在离线输入上验证，现场使用见 [CAMERA_COMPARE](CAMERA_COMPARE.md)。
+
+整合补齐：可选依赖 `camera-compare`、打包资源及独立命令 `sawyer-camera-compare`；启动器检查配置和已构建的 ROS 工作空间，保留显式网络覆盖；非法参数在采集前拒绝，启动失败会关闭参考读取器。仅启动此工具时需要其依赖环境，安装步骤已加入文档；A/B 控制和 Web 无改动，无需重启或重校准 A/B。
+验证：相机专项及 A 启动兼容共 16 项通过；完整启动器与专项共 34 项通过、1 项旧测试失败（`test_real_dispatch_has_lab_network_and_standard_limits` 仍预期 B 参考/指令为 120/200 ms，当前既有脚本为 250/250 ms，本次未改动）。C 采集器以 `-Wall -Wextra -Werror` 编译通过，wheel 构建通过。离线 Tk 界面使用本地缓存训练帧与已有实拍图，禁止 SSH，四组截图验证首尾帧、示范切换及缺帧状态通过；首次虚拟显示在沙箱内不可连接，经授权在沙箱外运行通过。证据在本机 `windows-local/artifacts/camera-compare-integration/`（不入库）。下一步：在现场 ROS 和双相机环境使用独立入口验收；未进行本次真机/相机采集验收。
 
 ### B 断开根因：状态帧超过 64 KiB（`send_failed:frame too large`）（2026-11-10）
 

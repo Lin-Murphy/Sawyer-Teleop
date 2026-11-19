@@ -84,6 +84,8 @@ sudo apt install adb          # 或把 platform-tools 加入 PATH
 本机配置与录制放在同级 `ubuntu-local/`（可用 `SAWYER_LOCAL_HOME` 覆盖）。
 Quest APK 安装（需先装 adb，如 `sudo apt install adb`）：`bash scripts/install-quest.sh --serial <序列号>`。
 
+独立摄像头比对使用 `scripts/ubuntu/Start-Camera-Compare.sh`，无需启动 Web；额外依赖与安装步骤见 [CAMERA_COMPARE](CAMERA_COMPARE.md)。
+
 ## 实体 Sawyer B（实验室 Ubuntu）
 
 实验室电脑只运行实机 B，**不需要 Docker、仿真或 pip 安装**，复用现有 ROS Noetic / Python 3.8 / Intera 工作空间。

@@ -53,7 +53,15 @@ Ubuntu 操作端和实验室实机 B 的安装见 [SETUP](sawyer_teleop/docs/SET
 | `Stop-B.cmd` | 停止本机 Gazebo B（同 `Start-B.cmd --stop`） |
 | `Test.cmd` | 全套离线测试；`ik` / `lab-scene` / `feedback-delay` / `env` 为专项检查 |
 
-**Ubuntu**（`sawyer_teleop/scripts/ubuntu/`）：`Start-A.sh`、`Start-B-Sim.sh`、`Start-B-Real.sh`。
+**Ubuntu**（`sawyer_teleop/scripts/ubuntu/`）：`Start-A.sh`、`Start-B-Sim.sh`、`Start-B-Real.sh`、`Start-Camera-Compare.sh`。
+
+摄像头比对在 Ubuntu 上单独启动，使用桌面窗口查看训练帧、实时画面、叠加和差异图：
+
+```bash
+./sawyer_teleop/scripts/ubuntu/Start-Camera-Compare.sh
+```
+
+不需要启动 Web 操作台。首次安装和参数说明见 [相机比对](sawyer_teleop/docs/CAMERA_COMPARE.md)。
 
 ## 目录
 
@@ -80,6 +88,7 @@ deploy/、deploy-*/     导出给实验室的 B-Lab-Ubuntu 目录
 | 处理报错、看懂暂停原因和诊断字段 | [TROUBLESHOOTING](sawyer_teleop/docs/TROUBLESHOOTING.md) |
 | 了解架构、线程和代码位置 | [ARCHITECTURE](sawyer_teleop/docs/ARCHITECTURE.md) |
 | 改代码、跑测试、导出 B | [DEVELOPMENT](sawyer_teleop/docs/DEVELOPMENT.md) |
+| 对比实时相机和训练图像 | [推理前相机对比](sawyer_teleop/docs/CAMERA_COMPARE.md) |
 | 查看录制数据格式 | [DATASET](sawyer_teleop/docs/reference/DATASET.md) |
 | 浏览全部文档与专项参考 | [文档索引](sawyer_teleop/docs/README.md) |
 
