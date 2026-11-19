@@ -225,6 +225,7 @@ class References:
         spec = importlib.util.spec_from_file_location('_camera_compare_pinned_resize', source)
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         self.resize = module.resize_with_pad
+        verify_resize(self.resize)
         self.loaded = True
 
     def select(self, mode, demo, pose):
@@ -380,6 +381,13 @@ def text(canvas, message, x, y, color=(230, 230, 230), scale=.5):
     cv2.putText(canvas, message, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
 
+def preview_rgb(rgb):
+    """Render camera-only frames while no verified training index is available."""
+    preview = np.zeros((224, 224, 3), dtype=np.uint8)
+    preview[28:196] = Image.fromarray(rgb).resize((224, 168), Image.Resampling.BILINEAR)
+    return preview
+
+
 class CompareWindow:
     def __init__(self, datasets, dataset, mode, demo, frame_modes=FRAME_MODES):
         import tkinter as tk
@@ -479,18 +487,17 @@ def run(args):
     future = None; reference = None; requested = None; features = {}; last_feature = 0
     frozen = False; last_frame = None; saved = 0; last_pose_select = 0
     status = 'Waiting for training reference'; selected = None; previous_choice = None
+    reference_error = None
     window = None
     camera_clock = time.perf_counter_ns if WINDOWS else time.monotonic_ns
     seen_cameras = set()
     camera_errors = {}
     try:
-        print('Loading actual training pose index (first run uses read-only SSH)...', flush=True)
-        initial_refs.load_index()
-        if args.demo is not None and args.demo not in initial_refs.demos:
-            raise ValueError(f'Original demo {args.demo} is unknown in {args.dataset}')
-        # Run a bit-exact RGB resize gate against outputs produced on pinned HPC Pillow11.2.1.
-        resize = initial_refs.resize
-        verify_resize(resize)
+        if not WINDOWS or args.headless:
+            print('Loading actual training pose index (first run uses read-only SSH)...', flush=True)
+            initial_refs.load_index()
+            if args.demo is not None and args.demo not in initial_refs.demos:
+                raise ValueError(f'Original demo {args.demo} is unknown in {args.dataset}')
         out.mkdir(parents=True)
         if WINDOWS:
             from .cameras import resolve_device
@@ -540,6 +547,7 @@ def run(args):
             if choice != previous_choice:
                 previous_choice = choice
                 reference = None; requested = None; selected = None; features = {}
+                reference_error = None
                 frozen = False; last_pose_select = 0
                 status = 'Waiting for training reference'
             if window and window.freeze_requested:
@@ -559,7 +567,8 @@ def run(args):
                         reference = result
                 except Exception as e:
                     if future_choice == choice:
-                        status = 'REFERENCE ERROR: ' + (str(e).splitlines()[-1] if str(e) else type(e).__name__)
+                        reference_error = str(e).strip() or type(e).__name__
+                        status = 'REFERENCE ERROR: ' + reference_error.splitlines()[-1]
                 future = None
             if not refs.loaded:
                 if future is None and requested != 'index':
@@ -577,6 +586,7 @@ def run(args):
                     last_pose_select = now
                 if future is None and selected is not None and selected != requested:
                     requested = selected; reference = None; features = {}
+                    reference_error = None
                     future_choice = choice
                     future = executor.submit(refs.images, *selected)
                     status = 'Loading verified training PNG ep%d/frame%d' % selected
@@ -592,7 +602,7 @@ def run(args):
                     age = (camera_clock() - meta['received_monotonic_ns']) / 1e6
                     if age > 250: raise RuntimeError('STALE camera %.0fms' % age)
                     if native.shape != (480, 640, 3): raise RuntimeError('Expected unchanged native 640x480 RGB stream')
-                    current = resize(native, 224, 224).copy()
+                    current = refs.resize(native, 224, 224).copy() if refs.loaded else preview_rgb(native)
                     latest[role] = (native, current, meta)
                     seen_cameras.add(role)
                     usable = reference is not None and (valid_pose or mode != 'pose')
@@ -644,8 +654,12 @@ def run(args):
             status_color = (90, 220, 90) if pose_error and pose_error['near'] else (50, 160, 255)
             text(canvas, status[:160], 14, 57, status_color, .47)
             text(canvas, 'Dataset | ' + datasets[dataset], 14, 746, scale=.48)
+            if WINDOWS and reference_error:
+                text(canvas, 'Live preview only. Check SSH or the local reference cache, then reopen the tool.',
+                     14, 773, scale=.48)
             last_frame = dict(canvas=canvas, latest=latest, comparison=comparison, records=records,
-                              pose_error=pose_error, selection={'dataset': dataset, 'mode': mode, 'demo_number': demo,
+                              pose_error=pose_error, reference_error=reference_error,
+                              selection={'dataset': dataset, 'mode': mode, 'demo_number': demo,
                                                                'source_episode': refs.demos.get(demo) if refs.loaded else None})
             frames += 1
             if window:
@@ -683,9 +697,11 @@ def save(directory, frame, reference):
     directory.mkdir()
     write_rgb(directory / 'comparison.png', cv2.cvtColor(frame['canvas'], cv2.COLOR_BGR2RGB))
     payload = dict(comparison_valid=bool(frame['comparison']), reference_pose_error=frame['pose_error'],
+                   reference_error=frame['reference_error'],
                    reference_selection=frame['selection'], cameras=frame['comparison'], raw_ros_observations=frame['records'],
                    reference=reference[1] if reference else None, saved_utc=datetime.now(timezone.utc).isoformat(),
-                   preprocessing='Pinned OpenPI RGB224 bilinear letterbox; no registration/flip/photometric correction',
+                   preprocessing=('Pinned OpenPI RGB224 bilinear letterbox; no registration/flip/photometric correction'
+                                  if frame['comparison'] else 'Live preview; no training comparison'),
                    feature_coordinates='224x224 RGB image pixels; y includes 28-row padding; current minus reference')
     (directory / 'observation.json').write_text(json.dumps(payload, indent=2))
     for role, (native, current, meta) in frame['latest'].items():

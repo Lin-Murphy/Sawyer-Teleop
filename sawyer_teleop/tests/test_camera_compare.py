@@ -1,6 +1,7 @@
 """Offline checks: no ROS master, USB camera, SSH or robot commands."""
 import hashlib
 import json
+from threading import Event
 import time
 
 import pytest
@@ -117,7 +118,6 @@ def test_ros_startup_failure_closes_reference_readers(tmp_path, references, monk
     monkeypatch.setattr(compare, 'References', Reader)
     monkeypatch.setattr(compare, 'WINDOWS', False)
     monkeypatch.setattr(compare, 'RosReadOnly', unavailable_ros)
-    monkeypatch.setattr(compare, 'verify_resize', lambda _: None)
     with pytest.raises(RuntimeError, match='ROS unavailable'):
         compare.main(['--headless', '--seconds', '1', '--output', str(tmp_path / 'output')])
     assert readers and all(reader.closed for reader in readers)
@@ -174,3 +174,60 @@ def test_windows_compares_both_streams_without_ros_and_saves_unicode_paths(tmp_p
     for role in ('main', 'wrist'):
         assert observation['cameras'][role]['metrics']['mae'] == 0
         assert (final / f'{role}_native_rgb.png').is_file()
+
+
+def test_windows_window_keeps_live_preview_after_ssh_timeout(tmp_path, monkeypatch):
+    preview_shown = Event()
+    monkeypatch.setattr(compare, 'WINDOWS', True)
+
+    class Capture:
+        def __init__(self, *args):
+            pass
+
+        def latest(self):
+            return np.full((480, 640, 3), 42, np.uint8), dict(received_monotonic_ns=time.perf_counter_ns())
+
+        def close(self):
+            pass
+
+    class Window:
+        closed = freeze_requested = save_requested = False
+
+        def __init__(self, *args):
+            self.root = self
+
+        def update(self):
+            pass
+
+        def destroy(self):
+            pass
+
+        def choices(self):
+            return compare.DATASET, 'first', None
+
+        def set_demos(self, refs, mode):
+            assert not refs.loaded
+
+        def show(self, canvas):
+            preview_shown.set()
+
+    def fail_ssh(self, action, *args):
+        assert action == 'index'
+        assert preview_shown.wait(2), 'Camera preview must render while SSH is pending'
+        raise RuntimeError('ssh: connect to host create port 22: Connection timed out')
+
+    monkeypatch.setattr(compare, 'WindowsCamera', Capture)
+    monkeypatch.setattr(compare, 'CompareWindow', Window)
+    monkeypatch.setattr(compare.References, 'fetch', fail_ssh)
+    output = tmp_path / 'output'
+    compare.main(['--seconds', '1', '--main-device', '2',
+                  '--reference-cache', str(tmp_path / 'empty-cache'), '--output', str(output)])
+
+    final = next(output.glob('*/final'))
+    observation = json.loads((final / 'observation.json').read_text(encoding='utf-8'))
+    assert observation['reference_error'].endswith('Connection timed out')
+    assert not observation['comparison_valid']
+    assert observation['reference'] is None
+    for role in ('main', 'wrist'):
+        assert (final / f'{role}_native_rgb.png').is_file()
+        assert not (final / f'{role}_diff_heatmap.png').exists()

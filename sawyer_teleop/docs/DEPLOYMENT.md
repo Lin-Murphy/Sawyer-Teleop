@@ -14,7 +14,11 @@
 
 Windows 使用独立采集会话。DirectShow 会协商视频格式，SN9C201 在打开时按驱动默认值初始化传感器（含曝光和增益）。训练参考使用原始训练 PNG，实时图不套用 A 的颜色校正。界面提供 **首帧** 和 **末帧**，可切换数据集与原始示范号；使用实时 ROS 姿态自动匹配时请用 [Ubuntu 入口](CAMERA_COMPARE.md)。
 
-首次加载某个数据集或未缓存的参考帧时，程序通过系统 OpenSSH 的 `create` 别名取数据。需先配置免交互密钥登录和数据读取权限，或从 Ubuntu 复制完整的 `reference-cache` 目录（包括已缓存的参考帧）到 `windows-local\camera-compare\reference-cache`。也可以用 `--ssh-host` 或 `--reference-cache` 覆盖。选定示范后，按 **S** 或点 **保存截图**，按 **Q** 或 **Esc** 退出。截图和退出时保存的最后一帧位于 `windows-local\camera-compare\snapshots`。
+Windows 窗口会先显示实时画面，后台加载训练参考。若 SSH 超时或参考不可用，窗口继续显示双路预览并提示原因。训练图、叠加图、热图和指标会在验证参考帧后显示。命令行 `--headless` 检查仍要求能加载训练索引。
+
+未缓存的数据通过系统 OpenSSH 的 `create` 别名获取。按 [KCL CREATE 的 Windows SSH 指南](https://docs.er.kcl.ac.uk/CREATE/hpc/access/#connecting-to-create-hpc-using-ssh-on-windows) 配置别名、密钥及访问认证。用 `ssh -G create` 检查 `hostname` 应为 `hpc.create.kcl.ac.uk`，用 `ssh -o BatchMode=yes create exit` 检查免交互连接，修复连接后重开比对窗口。也可从 Ubuntu 复制完整的 `reference-cache` 目录（含需要的参考帧）到 `windows-local\camera-compare\reference-cache`，或用 `--ssh-host`、`--reference-cache` 指定其他配置。
+
+按 **S** 或点 **保存截图**，按 **Q** 或 **Esc** 退出。截图和退出时保存的最后一帧位于 `windows-local\camera-compare\snapshots`。
 
 ```powershell
 .\Start-Camera-Compare.cmd --frame-mode last --demo 6
