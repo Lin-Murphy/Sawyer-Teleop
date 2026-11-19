@@ -1,5 +1,28 @@
 # 实验室 B 部署补充
 
+## Windows 相机对比
+
+在 Sawyer 仓库根目录打开 PowerShell。新机器先运行一次 `.\Setup.cmd`。已经用过 A 的机器可直接给同一个 Python 安装 Pillow 11.2.1（与训练预处理的验证版本一致）。
+
+```powershell
+.\windows-runtime\python\python.exe -I -m pip install "Pillow==11.2.1"
+.\Start-A.cmd camera-compare --list-cameras
+.\Start-A.cmd camera-compare
+```
+
+先退出正在占用相机的 A、推理程序或预览工具。对比窗口独立运行，无需启动 A/B、Quest 或 Docker。主相机默认选 RealSense D435 的 **RGB** 设备，腕相机默认用 Sandberg SN9C201（`0c45:627b`）和已有 WinUSB 驱动。默认请求 640×480 RGB。列表只枚举 DirectShow 设备，WinUSB 腕相机不会出现在其中。若使用其他相机，可按该列表传入名称或索引，例如 `--main-device 2 --wrist-device 1`，索引以本机列表为准。
+
+Windows 使用独立采集会话。DirectShow 会协商视频格式，SN9C201 在打开时按驱动默认值初始化传感器（含曝光和增益）。训练参考使用原始训练 PNG，实时图不套用 A 的颜色校正。界面提供 **首帧** 和 **末帧**，可切换数据集与原始示范号；使用实时 ROS 姿态自动匹配时请用 [Ubuntu 入口](CAMERA_COMPARE.md)。
+
+首次加载某个数据集或未缓存的参考帧时，程序通过系统 OpenSSH 的 `create` 别名取数据。需先配置免交互密钥登录和数据读取权限，或从 Ubuntu 复制完整的 `reference-cache` 目录（包括已缓存的参考帧）到 `windows-local\camera-compare\reference-cache`。也可以用 `--ssh-host` 或 `--reference-cache` 覆盖。选定示范后，按 **S** 或点 **保存截图**，按 **Q** 或 **Esc** 退出。截图和退出时保存的最后一帧位于 `windows-local\camera-compare\snapshots`。
+
+```powershell
+.\Start-A.cmd camera-compare --frame-mode last --demo 6
+.\Start-A.cmd camera-compare --headless --seconds 20
+```
+
+窗口按行显示主相机和腕相机，按列显示训练帧、当前帧、50% 叠加和差异热图。MAE、RMSE 和特征位移的含义见 [相机比对说明](CAMERA_COMPARE.md)。
+
 ## 机器人时钟自动测量（2026-11-07 起，取代下方手动恢复）
 
 B 启动时及运行中每 2 秒，用普通 UDP（无需 sudo、不改系统配置）向 `SAWYER_ROBOT_HOST`

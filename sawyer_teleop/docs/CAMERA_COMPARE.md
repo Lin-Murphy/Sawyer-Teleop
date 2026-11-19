@@ -1,5 +1,7 @@
 # 推理前实时相机对比
 
+Windows 安装和启动见 [DEPLOYMENT 的 Windows 相机对比](DEPLOYMENT.md#windows-相机对比)。Windows 以首帧、末帧为参考，截图包含两路 RGB、叠加、热图和指标。姿态匹配与 ROS 图像话题使用以下 Ubuntu 入口。
+
 在实验室 Ubuntu 桌面终端，从仓库根目录启动。
 
 ```bash

@@ -104,6 +104,20 @@ def install_quest(serial):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "camera-compare":
+        configure()
+        os.chdir(ROOT.parent)
+        os.environ.setdefault("SAWYER_LOCAL_HOME", str(local_home()))
+        try:
+            from sawyer_teleop.camera_compare import main as camera_compare
+        except ModuleNotFoundError as exc:
+            if exc.name != "PIL":
+                raise
+            print("Camera comparison needs Pillow. See sawyer_teleop/docs/DEPLOYMENT.md.", file=sys.stderr)
+            return 1
+        camera_compare(sys.argv[2:])
+        return 0
+
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=["web", "check", "install-quest"], nargs="?", default="web")
     parser.add_argument("--serial")

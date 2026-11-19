@@ -1,4 +1,4 @@
-"""Pre-inference read-only RGB comparison. No robot command or camera setting API."""
+"""Standalone pre-inference RGB comparison with no robot command interface."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -12,6 +12,7 @@ from pathlib import Path
 import shlex
 import struct
 import subprocess
+import sys
 import tarfile
 import threading
 import time
@@ -21,7 +22,7 @@ import numpy as np
 from PIL import Image
 
 ASSETS = Path(__file__).with_name('camera_compare_assets')
-LOCAL_HOME = Path(os.environ.get('SAWYER_LOCAL_HOME', 'ubuntu-local')).expanduser()
+WINDOWS = sys.platform == 'win32'
 HPC_PROJECT = '/scratch/prj/eng_demt_robot_learning'
 DATASET = HPC_PROJECT + '/sawyer_finray_pi05_state7_alltrain_v1_2026-11-12/train'
 DATASETS = {
@@ -33,12 +34,17 @@ FRAME_MODES = {'pose': '按实测姿态匹配', 'first': '首帧', 'last': '末�
 ALL_DEMOS = '全部示范'
 MAIN = '/dev/v4l/by-id/usb-Intel_R__RealSense_TM__Depth_Camera_435_Intel_R__RealSense_TM__Depth_Camera_435_345423020748-video-index0'
 WRIST = '/dev/v4l/by-id/usb-0c45_USB20_Camera-video-index0'
+WINDOWS_MAIN = 'Intel(R) RealSense(TM) Depth Camera 435 with RGB Module RGB'
+WINDOWS_WRIST = 'sn9c20x'
 RESIZE_SHA = 'd48b4bd7f44e79fe6db8a8e07c9161144fa250be686e1245014a8b47e6171977'
 
 
 def write_rgb(path, rgb):
-    if not cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)):
+    # OpenCV's filename API cannot reliably open Unicode paths on Windows.
+    ok, encoded = cv2.imencode('.png', cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    if not ok:
         raise OSError('Cannot save ' + str(path))
+    path.write_bytes(encoded.tobytes())
 
 
 def pose_distance(states, pose):
@@ -133,8 +139,11 @@ class References:
         command = shlex.join([self.python, '-', action, self.dataset, *map(str, args)])
         with self.process_lock:
             if self.closing: raise RuntimeError('Reference reader closed')
-            run = subprocess.Popen(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=12', self.host, command],
-                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                run = subprocess.Popen(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=12', self.host, command],
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            except FileNotFoundError as exc:
+                raise RuntimeError('OpenSSH client (ssh) is required to fetch uncached training references') from exc
             self.active_process = run
         try:
             output, errors = run.communicate(input=helper, timeout=100)
@@ -162,16 +171,16 @@ class References:
     def load_index(self):
         if not (self.cache / 'pose_index.json').exists():
             self.fetch('index')
-        index = json.loads((self.cache / 'pose_index.json').read_text())
+        index = json.loads((self.cache / 'pose_index.json').read_text(encoding='utf-8'))
         if index['dataset'] != self.dataset:
             self.fetch('index')
-            index = json.loads((self.cache / 'pose_index.json').read_text())
+            index = json.loads((self.cache / 'pose_index.json').read_text(encoding='utf-8'))
         if index['dataset'] != self.dataset:
             raise ValueError('Reference cache belongs to a different dataset')
         self.resolved_dataset = index.get('resolved_dataset', self.dataset)
         self.rows = index['rows']
-        info = json.loads((self.cache / 'info.json').read_text())
-        contract = json.loads((self.cache / 'contract.json').read_text())
+        info = json.loads((self.cache / 'info.json').read_text(encoding='utf-8'))
+        contract = json.loads((self.cache / 'contract.json').read_text(encoding='utf-8'))
         if (not contract.get('pose_frame', '').startswith('base/right_hand')
                 or any(info['features'][key]['shape'] != [224, 224, 3] for key in ('image', 'wrist_image'))
                 or 'openpi_client.image_tools.resize_with_pad' not in contract.get('image_processing', '')):
@@ -191,7 +200,7 @@ class References:
         self.states = np.column_stack((xyz, rotation))
         if not np.isfinite(self.states).all():
             raise ValueError('Dataset pose index is invalid')
-        mapping = json.loads((self.cache / 'source_mapping.json').read_text())
+        mapping = json.loads((self.cache / 'source_mapping.json').read_text(encoding='utf-8'))
         self.demos = {number: member['episode'] for number, member in enumerate(contract['members'], 1)}
         numbers = {source: number for number, source in self.demos.items()}
         segments = {segment['episode_index']: segment for segment in mapping['segments']}
@@ -236,7 +245,7 @@ class References:
         prefix = 'ep%03d_frame%04d' % (episode, frame)
         if not (self.cache / (prefix + '.json')).exists():
             self.fetch('frame', episode, frame)
-        meta = json.loads((self.cache / (prefix + '.json')).read_text())
+        meta = json.loads((self.cache / (prefix + '.json')).read_text(encoding='utf-8'))
         if (meta['dataset'] not in (self.dataset, self.resolved_dataset)
                 or (meta['episode_index'], meta['frame_index']) != (episode, frame)):
             raise ValueError('Reference metadata does not match requested frame')
@@ -348,12 +357,31 @@ class NativeCamera:
         self.output.close()
 
 
+class WindowsCamera:
+    def __init__(self, role, device, backend):
+        from .cameras import Camera
+        self.device, self.backend = device, backend
+        self.camera = Camera(name=role, device=device, backend=backend).start()
+
+    def latest(self):
+        frame = self.camera.latest()
+        # The shared Windows camera uses perf_counter_ns(), not monotonic_ns().
+        age = time.perf_counter_ns() - frame['ns']
+        return frame['rgb'], dict(sequence=frame['seq'], received_monotonic_ns=frame['ns'],
+                                  received_utc_ns=time.time_ns() - age,
+                                  clock='perf_counter_ns', backend=self.backend, device=self.device,
+                                  sensor_exposure_time_known=False)
+
+    def close(self):
+        self.camera.close()
+
+
 def text(canvas, message, x, y, color=(230, 230, 230), scale=.5):
     cv2.putText(canvas, message, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
 
 class CompareWindow:
-    def __init__(self, datasets, dataset, mode, demo):
+    def __init__(self, datasets, dataset, mode, demo, frame_modes=FRAME_MODES):
         import tkinter as tk
         from tkinter import ttk
         from PIL import ImageTk
@@ -363,7 +391,7 @@ class CompareWindow:
         self.root.title('相机对比 · 训练图 / 实时图 / 叠加 / Diff')
         self.root.geometry(f'{min(1240, self.root.winfo_screenwidth())}x{min(838, self.root.winfo_screenheight() - 70)}')
         self.datasets = {label: path for path, label in datasets.items()}
-        self.modes = {label: key for key, label in FRAME_MODES.items()}
+        self.modes = {label: key for key, label in frame_modes.items()}
         self.closed = False
         self.save_requested = False
         self.freeze_requested = False
@@ -376,7 +404,7 @@ class CompareWindow:
         self.dataset.pack(side='left', padx=(0, 14))
         ttk.Label(bar, text='参考帧').pack(side='left', padx=(0, 5))
         self.mode = ttk.Combobox(bar, values=list(self.modes), width=18, state='readonly')
-        self.mode.set(FRAME_MODES[mode])
+        self.mode.set(frame_modes[mode])
         self.mode.pack(side='left', padx=(0, 14))
         ttk.Label(bar, text='原始示范').pack(side='left', padx=(0, 5))
         self.demo = ttk.Combobox(bar, width=26, state='disabled')
@@ -450,8 +478,11 @@ def run(args):
     cameras = {}; executor = ThreadPoolExecutor(max_workers=1)
     future = None; reference = None; requested = None; features = {}; last_feature = 0
     frozen = False; last_frame = None; saved = 0; last_pose_select = 0
-    status = 'Waiting for measured ROS endpoint'; selected = None; previous_choice = None
+    status = 'Waiting for training reference'; selected = None; previous_choice = None
     window = None
+    camera_clock = time.perf_counter_ns if WINDOWS else time.monotonic_ns
+    seen_cameras = set()
+    camera_errors = {}
     try:
         print('Loading actual training pose index (first run uses read-only SSH)...', flush=True)
         initial_refs.load_index()
@@ -461,9 +492,21 @@ def run(args):
         resize = initial_refs.resize
         verify_resize(resize)
         out.mkdir(parents=True)
-        ros = RosReadOnly(args.main_topic, args.wrist_topic)
-        devices = [('main', args.main_device, args.main_topic), ('wrist', args.wrist_device, args.wrist_topic)]
-        if any(not topic for _, _, topic in devices):
+        if WINDOWS:
+            from .cameras import resolve_device
+            main_device = resolve_device(args.main_device, 'dshow')
+            if args.wrist_device == WINDOWS_WRIST:
+                wrist_device = args.wrist_device, 'sn9c20x'
+            else:
+                wrist_device = resolve_device(args.wrist_device, 'dshow')
+            if main_device == wrist_device:
+                raise ValueError('Main and wrist must use different cameras')
+            cameras['main'] = WindowsCamera('main', *main_device)
+            cameras['wrist'] = WindowsCamera('wrist', *wrist_device)
+        else:
+            ros = RosReadOnly(args.main_topic, args.wrist_topic)
+        if ros is not None and not (args.main_topic and args.wrist_topic):
+            devices = [('main', args.main_device, args.main_topic), ('wrist', args.wrist_device, args.wrist_topic)]
             executable = out / 'capture_native'
             subprocess.run(['gcc', '-O2', '-Wall', str(ASSETS / 'capture.c'), '-o', str(executable)], check=True)
             # Discover streaming ROS publishers before opening USB devices. Explicit role topics take priority.
@@ -472,13 +515,13 @@ def run(args):
             external = [t for t, kind in publishers if kind in ('sensor_msgs/Image', 'sensor_msgs/CompressedImage')
                         and any(s in t.lower() for s in ('realsense', 'wrist', 'd435'))
                         and not t.startswith('/io/internal_camera/')]
-            if external and not (args.main_topic and args.wrist_topic):
+            if external:
                 raise RuntimeError('Existing external camera topics found; rerun with --main-topic/--wrist-topic to reuse them: ' + ', '.join(external))
             for role, device, topic in devices:
                 if not topic: cameras[role] = NativeCamera(device, out / role, executable)
         start = time.monotonic(); frames = 0
         if not args.headless:
-            window = CompareWindow(datasets, args.dataset, args.frame_mode, args.demo)
+            window = CompareWindow(datasets, args.dataset, args.frame_mode, args.demo, frame_modes())
         while args.seconds is None or time.monotonic() - start < args.seconds:
             if window:
                 window.root.update()
@@ -503,7 +546,8 @@ def run(args):
                 frozen = not frozen if mode == 'pose' and reference else False
                 window.freeze_requested = False
 
-            now = time.monotonic(); records, topic_images = ros.snapshot()
+            now = time.monotonic()
+            records, topic_images = ros.snapshot() if ros is not None else ({}, {})
             endpoint = records.get('endpoint')
             valid_pose = (endpoint is not None and endpoint['message']['valid']
                           and endpoint['message']['header']['frame_id'] in ('', 'base', '/base')
@@ -545,11 +589,12 @@ def run(args):
                     if role not in topic_images and role not in cameras:
                         raise RuntimeError('Waiting for existing RGB8/BGR8 ROS image topic')
                     native, meta = topic_images[role] if role in topic_images else cameras[role].latest()
-                    age = (time.monotonic_ns() - meta['received_monotonic_ns']) / 1e6
+                    age = (camera_clock() - meta['received_monotonic_ns']) / 1e6
                     if age > 250: raise RuntimeError('STALE camera %.0fms' % age)
                     if native.shape != (480, 640, 3): raise RuntimeError('Expected unchanged native 640x480 RGB stream')
                     current = resize(native, 224, 224).copy()
                     latest[role] = (native, current, meta)
+                    seen_cameras.add(role)
                     usable = reference is not None and (valid_pose or mode != 'pose')
                     if usable:
                         ref = reference[0][role]
@@ -577,7 +622,9 @@ def run(args):
                         else: label += ' | no reliable global displacement'
                         text(canvas, label, 14, y + 270)
                 except RuntimeError as e:
-                    if role in cameras and cameras[role].process.poll() is not None: raise
+                    if ros is not None and role in cameras and cameras[role].process.poll() is not None:
+                        raise
+                    camera_errors[role] = str(e)
                     text(canvas, role.upper() + ': ' + str(e)[:130], 14, y + 100, (50, 100, 255))
             if now - last_feature > 1: last_feature = now
             pose_error = None
@@ -590,7 +637,7 @@ def run(args):
                     pose_error = {'position_mm': float(pp[0] * 1000), 'orientation_deg': float(aa[0]), 'near': near}
                     status += ' | pose %.1fmm / %.2fdeg | %s' % (
                         pp[0] * 1000, aa[0], 'NEAR pose' if near else 'POSE MISMATCH - wrist geometry inconclusive')
-                else:
+                elif ros is not None:
                     status += ' | NO FRESH MEASURED POSE'
                 if frozen:
                     status += ' | FROZEN'
@@ -609,8 +656,18 @@ def run(args):
             time.sleep(max(0, 1 / args.hz - (time.monotonic() - now)))
         if last_frame:
             save(out / 'final', last_frame, reference)
-        (out / 'summary.json').write_text(json.dumps({'rendered_frames': frames, 'snapshots': saved, 'output': str(out), 'parameter_set_calls': 0}, indent=2))
+        summary = dict(rendered_frames=frames, snapshots=saved, output=str(out))
+        if WINDOWS:
+            missing = {role: camera_errors.get(role, 'no frames')
+                       for role in ('main', 'wrist') if role not in seen_cameras}
+            summary.update(cameras_seen=sorted(seen_cameras), missing_cameras=missing)
+        else:
+            summary['parameter_set_calls'] = 0
+        (out / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
         print('Saved ' + str(out), flush=True)
+        if WINDOWS and args.headless and missing:
+            details = ', '.join(f'{role}: {error}' for role, error in missing.items())
+            raise RuntimeError('No valid 640x480 frames received from ' + details)
     finally:
         for camera in cameras.values(): camera.close()
         if ros is not None:
@@ -624,7 +681,7 @@ def run(args):
 
 def save(directory, frame, reference):
     directory.mkdir()
-    cv2.imwrite(str(directory / 'comparison.png'), frame['canvas'])
+    write_rgb(directory / 'comparison.png', cv2.cvtColor(frame['canvas'], cv2.COLOR_BGR2RGB))
     payload = dict(comparison_valid=bool(frame['comparison']), reference_pose_error=frame['pose_error'],
                    reference_selection=frame['selection'], cameras=frame['comparison'], raw_ros_observations=frame['records'],
                    reference=reference[1] if reference else None, saved_utc=datetime.now(timezone.utc).isoformat(),
@@ -652,26 +709,46 @@ def verify_resize(resize):
             raise RuntimeError('Resize differs from pinned training output; use a compatible Pillow environment')
 
 
+def frame_modes():
+    return {mode: FRAME_MODES[mode] for mode in ('first', 'last')} if WINDOWS else FRAME_MODES
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--reference-cache', type=Path, default=LOCAL_HOME / 'camera-compare/reference-cache')
-    parser.add_argument('--output', type=Path, default=LOCAL_HOME / 'camera-compare/snapshots')
+    local_home = Path(os.environ.get('SAWYER_LOCAL_HOME', 'windows-local' if WINDOWS else 'ubuntu-local')).expanduser()
+    parser.add_argument('--reference-cache', type=Path, default=local_home / 'camera-compare/reference-cache')
+    parser.add_argument('--output', type=Path, default=local_home / 'camera-compare/snapshots')
     parser.add_argument('--ssh-host', default='create')
     parser.add_argument('--hpc-python', default='/scratch/prj/eng_demt_robot_learning/robot-vla/.venv-hpc-service/bin/python')
     parser.add_argument('--dataset', default=DATASET)
-    parser.add_argument('--frame-mode', choices=FRAME_MODES, default='pose')
+    parser.add_argument('--frame-mode', choices=frame_modes(), default='first' if WINDOWS else 'pose')
     parser.add_argument('--demo', '--episode', dest='demo', type=int, help='Original demonstration number, starting at 1')
-    parser.add_argument('--main-device', default=MAIN); parser.add_argument('--wrist-device', default=WRIST)
-    parser.add_argument('--main-topic'); parser.add_argument('--wrist-topic')
+    if WINDOWS:
+        parser.add_argument('--main-device', default=WINDOWS_MAIN, help='DirectShow name or index')
+        parser.add_argument('--wrist-device', default=WINDOWS_WRIST, help='sn9c20x (WinUSB), DirectShow name or index')
+        parser.add_argument('--list-cameras', action='store_true', help='List DirectShow devices without opening a stream')
+    else:
+        parser.add_argument('--main-device', default=MAIN); parser.add_argument('--wrist-device', default=WRIST)
+        parser.add_argument('--main-topic'); parser.add_argument('--wrist-topic')
     parser.add_argument('--hz', type=float, default=10)
     parser.add_argument('--seconds', type=float)
     parser.add_argument('--headless', action='store_true', help='Bounded actual-camera smoke test; requires --seconds')
     args = parser.parse_args(argv)
+    if WINDOWS and args.list_cameras:
+        from .cameras import windows_camera_names
+        names = windows_camera_names()
+        for index, name in enumerate(names):
+            print(f'{index}: {name}')
+        if not names:
+            print('No DirectShow cameras found.')
+        print('A Sandberg SN9C201 using WinUSB is selected with --wrist-device sn9c20x and is not listed here.')
+        return
     if not 0 < args.hz <= 30 or (args.seconds is not None and (not math.isfinite(args.seconds) or args.seconds <= 0)):
         parser.error('Invalid rate or duration')
     if args.demo is not None and args.demo < 1: parser.error('--demo must be a positive original demonstration number')
     if args.headless and args.seconds is None: parser.error('--headless requires --seconds')
-    if not args.headless and not os.environ.get('DISPLAY'): parser.error('No DISPLAY; start in a desktop terminal or use --headless --seconds 10')
+    if not WINDOWS and not args.headless and not os.environ.get('DISPLAY'):
+        parser.error('No DISPLAY; start in a desktop terminal or use --headless --seconds 10')
     run(args)
 
 

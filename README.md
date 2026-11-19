@@ -55,7 +55,7 @@ Ubuntu 操作端和实验室实机 B 的安装见 [SETUP](sawyer_teleop/docs/SET
 
 **Ubuntu**（`sawyer_teleop/scripts/ubuntu/`）：`Start-A.sh`、`Start-B-Sim.sh`、`Start-B-Real.sh`、`Start-Camera-Compare.sh`。
 
-摄像头比对在 Ubuntu 上单独启动，使用桌面窗口查看训练帧、实时画面、叠加和差异图：
+摄像头比对使用独立桌面窗口查看训练帧、实时画面、叠加和差异图。Windows 见 [部署说明](sawyer_teleop/docs/DEPLOYMENT.md#windows-相机对比)，Ubuntu 从桌面终端启动：
 
 ```bash
 ./sawyer_teleop/scripts/ubuntu/Start-Camera-Compare.sh

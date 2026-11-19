@@ -1,13 +1,14 @@
 """Offline checks: no ROS master, USB camera, SSH or robot commands."""
 import hashlib
 import json
+import time
 
 import pytest
 
 np = pytest.importorskip('numpy')
 pytest.importorskip('cv2')
 pytest.importorskip('PIL')
-from sawyer_teleop import camera_compare as compare
+from sawyer_teleop import camera_compare as compare, cameras
 
 
 @pytest.fixture
@@ -33,7 +34,15 @@ def references(tmp_path, monkeypatch):
     }
     for name, value in documents.items():
         (tmp_path / name).write_text(json.dumps(value))
-    source = b'def resize_with_pad(*args): pass\n'
+    source = b'''import numpy as np
+from PIL import Image
+
+def resize_with_pad(rgb, height, width):
+    resized = Image.fromarray(rgb).resize((width, 168), Image.Resampling.BILINEAR)
+    result = np.zeros((height, width, 3), np.uint8)
+    result[28:196] = np.asarray(resized)
+    return result
+'''
     (tmp_path / 'pinned_image_tools.py').write_bytes(source)
     monkeypatch.setattr(compare, 'RESIZE_SHA', hashlib.sha256(source).hexdigest())
     def no_ssh(*_):
@@ -106,8 +115,62 @@ def test_ros_startup_failure_closes_reference_readers(tmp_path, references, monk
     def unavailable_ros(*_):
         raise RuntimeError('ROS unavailable')
     monkeypatch.setattr(compare, 'References', Reader)
+    monkeypatch.setattr(compare, 'WINDOWS', False)
     monkeypatch.setattr(compare, 'RosReadOnly', unavailable_ros)
     monkeypatch.setattr(compare, 'verify_resize', lambda _: None)
     with pytest.raises(RuntimeError, match='ROS unavailable'):
         compare.main(['--headless', '--seconds', '1', '--output', str(tmp_path / 'output')])
     assert readers and all(reader.closed for reader in readers)
+
+
+def test_windows_compares_both_streams_without_ros_and_saves_unicode_paths(tmp_path, references, monkeypatch):
+    devices = []
+    monkeypatch.setattr(compare, 'WINDOWS', True)
+
+    class Capture:
+        def __init__(self, **config):
+            self.config = config
+            self.closed = False
+            devices.append(self)
+
+        def start(self):
+            return self
+
+        def latest(self):
+            return dict(rgb=np.full((480, 640, 3), 42, np.uint8), seq=1, ns=time.perf_counter_ns())
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(cameras, 'Camera', Capture)
+    monkeypatch.setattr(compare, 'RosReadOnly', lambda *_: pytest.fail('Windows must not start ROS'))
+    # Cache the last frame from original demo 1. The fixture's local Pillow resize
+    # still has to match the committed training probes byte-for-byte.
+    prefix = 'ep000_frame0000'
+    rgb = references.resize(np.full((480, 640, 3), 42, np.uint8), 224, 224)
+    meta = dict(dataset=compare.DATASET, episode_index=0, frame_index=0, images={})
+    for key in ('image', 'wrist_image'):
+        png = references.cache / f'{prefix}_{key}.png'
+        compare.Image.fromarray(rgb).save(png)
+        meta['images'][key] = dict(sha256=hashlib.sha256(png.read_bytes()).hexdigest())
+    (references.cache / f'{prefix}.json').write_text(json.dumps(meta), encoding='utf-8')
+
+    output = tmp_path / '相机对比'
+    compare.main(['--headless', '--seconds', '1', '--main-device', '2', '--frame-mode', 'last',
+                  '--demo', '1', '--reference-cache', str(references.cache), '--output', str(output)])
+
+    assert [device.config for device in devices] == [
+        dict(name='main', device=2, backend='dshow'),
+        dict(name='wrist', device='sn9c20x', backend='sn9c20x'),
+    ]
+    assert all(device.closed for device in devices)
+    final = next(output.glob('*/final'))
+    observation = json.loads((final / 'observation.json').read_text(encoding='utf-8'))
+    assert observation['raw_ros_observations'] == {}
+    assert observation['reference']['demo_number'] == 1
+    assert observation['comparison_valid']
+    with compare.Image.open(final / 'comparison.png') as screenshot:
+        assert screenshot.size == (1240, 790)
+    for role in ('main', 'wrist'):
+        assert observation['cameras'][role]['metrics']['mae'] == 0
+        assert (final / f'{role}_native_rgb.png').is_file()

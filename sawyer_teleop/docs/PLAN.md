@@ -8,6 +8,14 @@
 
 ## 当前决定
 
+### Windows 双相机参考对比（2026-11-19）
+
+**仅更新 A 侧的独立工具。** 本机 `main` 从远端主线 `bd14225` 快进整合 `codex/camera-compare` 的 `7627dc5`，再增加 Windows 入口 `Start-A.cmd camera-compare`。沿用项目 DirectShow 和 SN9C20x/WinUSB 采集，Windows 可按原始示范查看首帧、末帧，使用相同的训练图校验、叠加和差异指标。ROS 姿态匹配和话题输入继续使用 Ubuntu 入口。Windows 比对工具需要 Pillow，默认采集时由 WinUSB 驱动初始化腕相机。A/B 遥操无需重启或重校准。安装和启动见 [DEPLOYMENT](DEPLOYMENT.md#windows-相机对比)。
+
+Windows 原生离线全套 1,033 通过、26 跳过，含相机专项 13 项；Ubuntu 脚本静态语法检查通过。Windows Tk 用合成双路 RGB 和测试参考缓存验证窗口、五组预处理探针、截图及退出。系统枚举见到 D435 RGB（当次 DirectShow 索引 2）和安装了 `winusb.inf` 的 SN9C201。首次在受限环境运行遇到临时目录和回环访问失败，换到可用的本机环境复跑通过。实际双路采集与 HPC 参考读取尚待现场验收。
+
+[源码、测试输入和参数哈希](../../windows-local/artifacts/camera-compare-windows-20261119/sha256.json)，[原生测试报告](../../windows-local/artifacts/camera-compare-windows-20261119/native-suite.xml)，[桌面测试结果](../../windows-local/artifacts/camera-compare-windows-20261119/gui-smoke.txt)。
+
 ### 推理前双相机参考对比（2026-11-19）
 
 **仅新增 Ubuntu 操作端入口。** 使用 `Start-Camera-Compare.sh` 独立查看实时双路 RGB 和训练帧，按原始示范 01–30 选择首帧、末帧或姿态最近帧，并查看 50% 叠加和差异热图。工具只读取相机和 ROS 反馈，B 无需升级、重启或重新校准。参考缓存和截图保存在本机。已用真实训练帧及保存的实拍画面验证界面切换、跨分段首尾帧和缺帧状态。本次移植在离线输入上验证，现场使用见 [CAMERA_COMPARE](CAMERA_COMPARE.md)。
