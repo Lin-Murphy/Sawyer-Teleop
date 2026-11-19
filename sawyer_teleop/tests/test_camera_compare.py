@@ -274,3 +274,58 @@ def test_windows_default_uses_web_camera_settings_without_loading_training(tmp_p
     assert observation['reference_error'] is None
     assert observation['reference_selection']['dataset'] is None
     assert all((final / f'{role}_native_rgb.png').is_file() for role in ('main', 'wrist'))
+
+
+def test_windows_uses_saved_local_episode_as_offline_reference(tmp_path, monkeypatch):
+    monkeypatch.setattr(compare, 'WINDOWS', True)
+    batch = tmp_path / 'data' / 'batch_local'
+    episode = batch / 'episode_20261110T173719_demo'
+    episode.mkdir(parents=True)
+    (episode / 'manifest.json').write_text(json.dumps(
+        dict(complete=True, cameras=['realsense', 'wrist'])), encoding='utf-8')
+    (episode / 'states.jsonl').touch()
+    for name, timestamps, levels in (
+        ('realsense', (100, 130, 170), (10, 30, 50)),
+        ('wrist', (110, 140, 160), (15, 35, 55)),
+    ):
+        folder = episode / 'cameras' / name
+        folder.mkdir(parents=True)
+        (folder / 'frames.jsonl').write_text(''.join(f'{{"ns":{stamp}}}\n' for stamp in timestamps), encoding='utf-8')
+        (folder / 'info.json').write_text(json.dumps(dict(shape=[480, 640, 3], dtype='uint8')), encoding='utf-8')
+        (folder / 'frames.rgb').write_bytes(b''.join(bytes([level]) * (480 * 640 * 3) for level in levels))
+    config = tmp_path / 'config' / 'operator.json'
+    config.parent.mkdir()
+    config.write_text(json.dumps(dict(data_dir='../data', cameras=[])), encoding='utf-8')
+
+    class Capture:
+        def __init__(self, **settings):
+            self.level = 50 if settings['name'] == 'main' else 55
+
+        def latest(self):
+            return np.full((480, 640, 3), self.level, np.uint8), dict(received_monotonic_ns=time.perf_counter_ns())
+
+        def close(self):
+            pass
+
+    def no_ssh(*args):
+        pytest.fail('The local batch must not use SSH')
+
+    monkeypatch.setattr(compare, 'WindowsCamera', Capture)
+    monkeypatch.setattr(compare.References, 'fetch', no_ssh)
+    output = tmp_path / 'output'
+    compare.main(['--headless', '--seconds', '1', '--frame-mode', 'last', '--demo', '1',
+                  '--main-device', '2', '--wrist-device', 'sn9c20x', '--output', str(output)],
+                 default_operator_config=lambda: config)
+
+    final = next(output.glob('*/final'))
+    observation = json.loads((final / 'observation.json').read_text(encoding='utf-8'))
+    reference = observation['reference']
+    assert observation['comparison_valid']
+    assert reference['source'] == 'local_recording'
+    assert reference['recording_path'] == str(episode)
+    assert reference['target_ns'] == 160
+    assert reference['images']['main']['timestamp_ns'] == 170
+    assert reference['images']['wrist']['timestamp_ns'] == 160
+    for role in ('main', 'wrist'):
+        assert observation['cameras'][role]['metrics']['mae'] == 0
+        assert (final / f'{role}_recorded.png').is_file()

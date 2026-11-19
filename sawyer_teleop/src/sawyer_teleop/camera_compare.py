@@ -36,6 +36,7 @@ MAIN = '/dev/v4l/by-id/usb-Intel_R__RealSense_TM__Depth_Camera_435_Intel_R__Real
 WRIST = '/dev/v4l/by-id/usb-0c45_USB20_Camera-video-index0'
 WINDOWS_WRIST = 'sn9c20x'
 LOCAL_LIVE_LABEL = '本机实时画面'
+MAIN_CAMERA_NAMES = ('realsense', 'main', 'front')
 RESIZE_SHA = 'd48b4bd7f44e79fe6db8a8e07c9161144fa250be686e1245014a8b47e6171977'
 
 
@@ -218,14 +219,18 @@ class References:
             self.demo_by_frame[episode, frame] = demo
         for demo, rows in self.demo_rows.items():
             self.demo_rows[demo] = np.array([index for _, index in sorted(rows)], dtype=int)
+        self.available_demos = {number for number, rows in self.demo_rows.items() if rows.size}
         source = self.cache / 'pinned_image_tools.py'
         if hashlib.sha256(source.read_bytes()).hexdigest() != RESIZE_SHA:
             raise ValueError('Training resize implementation hash mismatch')
         spec = importlib.util.spec_from_file_location('_camera_compare_pinned_resize', source)
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         self.resize = module.resize_with_pad
-        verify_resize(self.resize)
+        verify_resize(self.resize_rgb)
         self.loaded = True
+
+    def resize_rgb(self, rgb):
+        return self.resize(rgb, 224, 224)
 
     def select(self, mode, demo, pose):
         candidates = self.demo_rows[demo] if demo is not None else None
@@ -384,7 +389,7 @@ def windows_camera_settings(args):
     settings = {}
     devices = []
     for role, override, names in (
-        ('main', args.main_device, ('realsense', 'main', 'front')),
+        ('main', args.main_device, MAIN_CAMERA_NAMES),
         ('wrist', args.wrist_device, ('wrist',)),
     ):
         if override is None:
@@ -421,6 +426,101 @@ def preview_rgb(rgb):
     preview = np.zeros((224, 224, 3), dtype=np.uint8)
     preview[28:196] = Image.fromarray(rgb).resize((224, 168), Image.Resampling.BILINEAR)
     return preview
+
+
+class LocalReferences:
+    """Read lossless RGB frames from saved Sawyer episodes on this computer."""
+    resize_rgb = staticmethod(preview_rgb)
+
+    def __init__(self, folder, episodes):
+        self.dataset = str(folder)
+        self.episodes = episodes
+        self.loaded = False
+
+    def load_index(self):
+        self.folders = {}
+        for folder in self.episodes:
+            manifest_path = folder / 'manifest.json'
+            if manifest_path.is_file():
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                names = manifest.get('cameras', [])
+                if not manifest.get('complete') or 'wrist' not in names or not any(
+                    name in names for name in MAIN_CAMERA_NAMES
+                ):
+                    continue
+            self.folders[len(self.folders) + 1] = folder
+        if not self.folders:
+            raise ValueError('No complete dual-camera recordings in ' + self.dataset)
+        self.demos = {number: folder.name for number, folder in self.folders.items()}
+        self.available_demos = self.demos.keys()
+        verify_resize(self.resize_rgb)
+        self.loaded = True
+
+    def select(self, mode, demo, pose):
+        return demo, mode
+
+    def images(self, demo, mode):
+        from .episode_store import open_episode
+
+        folder = self.folders[demo]
+        with open_episode(folder) as recording:
+            if not recording.attrs.get('complete'):
+                raise ValueError('Recording is incomplete: ' + folder.name)
+            frames = recording['frames']
+            main = next((name for name in MAIN_CAMERA_NAMES if name in frames), None)
+            streams = {}
+            for role, name in (('main', main), ('wrist', 'wrist')):
+                if name is None or name not in frames:
+                    raise ValueError(f'{folder.name} is missing the {role} camera')
+                timestamps = np.asarray(frames[name]['ns'])
+                rgb = frames[name]['rgb']
+                if (timestamps.size == 0 or timestamps.dtype.kind not in 'iu'
+                        or rgb.shape != (timestamps.size, 480, 640, 3) or rgb.dtype != np.uint8):
+                    raise ValueError(f'{folder.name} has no usable 640x480 RGB frames for {name}')
+                streams[role] = name, timestamps, rgb
+            start = max(int(stamps.min()) for _, stamps, _ in streams.values())
+            end = min(int(stamps.max()) for _, stamps, _ in streams.values())
+            if end < start:
+                raise ValueError('The two recorded camera streams do not overlap: ' + folder.name)
+            target = start if mode == 'first' else end
+            images, sources = {}, {}
+            for role, (name, stamps, rgb) in streams.items():
+                index = int(np.argmin(np.abs(stamps.astype(np.int64, copy=False) - target)))
+                frame = rgb[index]
+                images[role] = self.resize_rgb(frame)
+                sources[role] = dict(camera=name, frame_index=index, timestamp_ns=int(stamps[index]),
+                                     rgb_sha256=hashlib.sha256(frame.tobytes()).hexdigest())
+        return images, dict(source='local_recording', recording_path=str(folder),
+                            demo_number=demo, source_episode=folder.name, frame_mode=mode,
+                            target_ns=target, images=sources)
+
+    def close(self):
+        pass  # Each recording is closed immediately after reading its two frames.
+
+
+def local_reference_sources(args):
+    from .episode_store import find_episodes, is_episode
+
+    root = args.recordings
+    if root is None:
+        operator = json.loads(args.operator_config.read_text(encoding='utf-8'))
+        root = args.operator_config.resolve().parent / Path(operator.get('data_dir', '../data')).expanduser()
+    root = root.resolve()
+    if not root.is_dir():
+        if args.recordings is not None:
+            raise ValueError('Local recordings directory not found: ' + str(root))
+        return {}
+    if is_episode(root):
+        return {str(root): LocalReferences(root, [root])}
+    folders = [root, *sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith('episode_'))]
+    sources = {}
+    for folder in folders:
+        episodes = find_episodes(folder)
+        if episodes:
+            sources[str(folder)] = LocalReferences(folder, episodes)
+    if args.recordings is not None and not sources:
+        raise ValueError('No Sawyer recordings found in ' + str(root))
+    return sources
 
 
 class CompareWindow:
@@ -493,14 +593,14 @@ class CompareWindow:
         self.demo_options = refs.dataset, mode
         options = {}
         for number, source in refs.demos.items():
-            unavailable = ' · 当前分区无帧' if not refs.demo_rows[number].size else ''
+            unavailable = ' · 当前分区无帧' if number not in refs.available_demos else ''
             timestamp = source.partition('_')[2].partition('_')[0]
             recorded_time = source
             if len(timestamp) == 15 and timestamp[8] == 'T':
                 recorded_time = f'{timestamp[4:6]}-{timestamp[6:8]} {timestamp[9:11]}:{timestamp[11:13]}:{timestamp[13:15]}'
             options[number] = f'{number:02d} · {recorded_time}{unavailable}'
         default = None if mode == 'pose' else next(
-            (number for number, rows in refs.demo_rows.items() if rows.size), None)
+            (number for number in refs.demos if number in refs.available_demos), None)
         if mode == 'pose':
             options = {None: ALL_DEMOS, **options}
         selected = self.choices()[2]
@@ -517,18 +617,25 @@ class CompareWindow:
 
 def run(args):
     datasets = dict(DATASETS)
+    local = {}
     if WINDOWS:
-        datasets = {None: LOCAL_LIVE_LABEL, **datasets}
+        local = local_reference_sources(args)
+        datasets = {None: LOCAL_LIVE_LABEL, **{path: Path(path).name for path in local}}
+        if args.dataset is None:
+            args.dataset = next(iter(local), None)
+        elif args.dataset in DATASETS:
+            datasets[args.dataset] = DATASETS[args.dataset]
     datasets.setdefault(args.dataset, args.dataset)
-    readers = {path: References(args.reference_cache, args.ssh_host, args.hpc_python, path)
-               for path in datasets if path is not None}
+    readers = dict(local)
+    readers.update({path: References(args.reference_cache, args.ssh_host, args.hpc_python, path)
+                    for path in datasets if path is not None and path not in local})
     initial_refs = readers.get(args.dataset)
     out = args.output / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
     ros = None
     cameras = {}; executor = ThreadPoolExecutor(max_workers=1)
     future = None; reference = None; requested = None; features = {}; last_feature = 0
     frozen = False; last_frame = None; saved = 0; last_pose_select = 0
-    status = 'Waiting for training reference'; selected = None; previous_choice = None
+    status = 'Waiting for reference'; selected = None; previous_choice = None
     reference_error = None
     window = None
     camera_clock = time.perf_counter_ns if WINDOWS else time.monotonic_ns
@@ -536,7 +643,7 @@ def run(args):
     camera_errors = {}
     try:
         if initial_refs is not None and (not WINDOWS or args.headless):
-            print('Loading actual training pose index (first run uses read-only SSH)...', flush=True)
+            print('Loading reference index...', flush=True)
             initial_refs.load_index()
             if args.demo is not None and args.demo not in initial_refs.demos:
                 raise ValueError(f'Original demo {args.demo} is unknown in {args.dataset}')
@@ -572,18 +679,20 @@ def run(args):
             else:
                 dataset, mode, demo = args.dataset, args.frame_mode, args.demo
             refs = readers.get(dataset)
+            local_recording = dataset in local
+            reference_label = 'Recorded RGB' if local_recording else 'Training RGB'
             if window:
                 window.set_demos(refs, mode)
                 _, _, demo = window.choices()
             elif refs is not None and mode != 'pose' and demo is None:
-                demo = next(number for number, rows in refs.demo_rows.items() if rows.size)
+                demo = next(number for number in refs.demos if number in refs.available_demos)
             choice = dataset, mode, demo
             if choice != previous_choice:
                 previous_choice = choice
                 reference = None; requested = None; selected = None; features = {}
                 reference_error = None
                 frozen = False; last_pose_select = 0
-                status = 'Waiting for training reference'
+                status = 'Waiting for reference'
             if window and window.freeze_requested:
                 frozen = not frozen if mode == 'pose' and reference else False
                 window.freeze_requested = False
@@ -605,13 +714,13 @@ def run(args):
                         status = 'REFERENCE ERROR: ' + reference_error.splitlines()[-1]
                 future = None
             if refs is None:
-                status = 'Local cameras | Select a training dataset to load reference images'
+                status = 'Local cameras | Select a recording batch to compare'
             elif not refs.loaded:
                 if future is None and requested != 'index':
                     requested = 'index'; future_choice = choice
                     future = executor.submit(refs.load_index)
-                    status = 'Loading dataset index: ' + datasets[dataset]
-            elif demo is not None and not refs.demo_rows[demo].size:
+                    status = 'Loading reference index: ' + datasets[dataset]
+            elif demo is not None and demo not in refs.available_demos:
                 status = f'DEMO {demo:02d}: no frames in the selected dataset split'
             elif mode == 'pose' and not valid_pose:
                 status = 'NO FRESH MEASURED POSE: pose matching paused'
@@ -625,7 +734,7 @@ def run(args):
                     reference_error = None
                     future_choice = choice
                     future = executor.submit(refs.images, *selected)
-                    status = 'Loading verified training PNG ep%d/frame%d' % selected
+                    status = 'Loading reference frames'
             canvas = np.full((790, 1240, 3), 24, np.uint8)
             shortcuts = 'Q/Esc quit | S save RGB' if refs is None else 'Q/Esc quit | S save raw + comparison'
             if mode == 'pose':
@@ -641,7 +750,7 @@ def run(args):
                     age = (camera_clock() - meta['received_monotonic_ns']) / 1e6
                     if age > 250: raise RuntimeError('STALE camera %.0fms' % age)
                     if native.shape != (480, 640, 3): raise RuntimeError('Expected unchanged native 640x480 RGB stream')
-                    current = refs.resize(native, 224, 224).copy() if refs is not None and refs.loaded else preview_rgb(native)
+                    current = refs.resize_rgb(native).copy() if refs is not None and refs.loaded else preview_rgb(native)
                     latest[role] = (native, current, meta)
                     seen_cameras.add(role)
                     if refs is None:
@@ -668,7 +777,7 @@ def run(args):
                     for ci, im in enumerate(row):
                         x = 14 + ci * 305
                         canvas[y:y + 224, x:x + 224] = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
-                        text(canvas, ['Training RGB', 'Current RGB', '50% overlay', 'RGB |diff| mean; fixed 0..255'][ci], x, y + 245, scale=.43)
+                        text(canvas, [reference_label, 'Current RGB', '50% overlay', 'RGB |diff| mean; fixed 0..255'][ci], x, y + 245, scale=.43)
                     ft = features.get(role)
                     if usable and ft:
                         label = 'Features: %d unique, %d inliers, confidence %s' % (ft['unique_matches'], ft['inliers'], ft['confidence'])
@@ -684,7 +793,10 @@ def run(args):
             pose_error = None
             if reference is not None:
                 meta = reference[1]
-                status = f"Demo {meta['demo_number']:02d} | segment {meta['episode_index']}/frame {meta['frame_index']} ({mode})"
+                if local_recording:
+                    status = f"Demo {meta['demo_number']:02d} | {meta['source_episode']} ({mode})"
+                else:
+                    status = f"Demo {meta['demo_number']:02d} | segment {meta['episode_index']}/frame {meta['frame_index']} ({mode})"
                 if valid_pose:
                     pp, aa, _ = pose_distance([meta['pose_state_xyz_rotvec']], endpoint['message']['pose'])
                     near = bool(pp[0] <= .02 and aa[0] <= 5)
@@ -700,8 +812,9 @@ def run(args):
             if refs is not None:
                 text(canvas, 'Dataset | ' + datasets[dataset].replace(' · ', ' / '), 14, 746, scale=.48)
             if WINDOWS and reference_error:
-                text(canvas, 'Live preview only. Check SSH or the local reference cache, then reopen the tool.',
-                     14, 773, scale=.48)
+                hint = ('Select another recording or batch to continue.' if local_recording else
+                        'Check SSH or the training reference cache.')
+                text(canvas, hint, 14, 773, scale=.48)
             last_frame = dict(canvas=canvas, latest=latest, comparison=comparison, records=records,
                               pose_error=pose_error, reference_error=reference_error,
                               selection={'dataset': dataset, 'mode': mode, 'demo_number': demo,
@@ -746,14 +859,16 @@ def save(directory, frame, reference):
                    reference_selection=frame['selection'], cameras=frame['comparison'], raw_ros_observations=frame['records'],
                    reference=reference[1] if reference else None, saved_utc=datetime.now(timezone.utc).isoformat(),
                    preprocessing=('Pinned OpenPI RGB224 bilinear letterbox of captured RGB'
-                                  if frame['comparison'] else 'Live preview; no training comparison'),
+                                  if frame['comparison'] else 'Live preview; no reference comparison'),
                    feature_coordinates='224x224 RGB image pixels; y includes 28-row padding; current minus reference')
     (directory / 'observation.json').write_text(json.dumps(payload, indent=2))
     for role, (native, current, meta) in frame['latest'].items():
         write_rgb(directory / (role + '_native_rgb.png'), native)
         write_rgb(directory / (role + '_current.png'), current)
         if reference and role in frame['comparison']:
-            ref = reference[0][role]; write_rgb(directory / (role + '_training.png'), ref)
+            ref = reference[0][role]
+            source = 'recorded' if reference[1].get('source') == 'local_recording' else 'training'
+            write_rgb(directory / f'{role}_{source}.png', ref)
             overlay = np.rint((ref.astype(float) + current.astype(float)) / 2).astype(np.uint8)
             write_rgb(directory / (role + '_overlay50.png'), overlay)
             _, diff = pixel_metrics(ref, current); np.save(directory / (role + '_rgb_absdiff_mean.npy'), diff)
@@ -766,7 +881,7 @@ def verify_resize(resize):
     expected = json.loads(probes.read_text())
     for seed, target in expected['rgb640x480_seed_to_output_sha256'].items():
         rgb = np.random.RandomState(int(seed)).randint(0, 256, size=(480, 640, 3)).astype(np.uint8)
-        if hashlib.sha256(resize(rgb, 224, 224).tobytes()).hexdigest() != target:
+        if hashlib.sha256(resize(rgb).tobytes()).hexdigest() != target:
             raise RuntimeError('Resize differs from pinned training output; use a compatible Pillow environment')
 
 
@@ -782,11 +897,12 @@ def main(argv=None, default_operator_config=None):
     parser.add_argument('--ssh-host', default='create')
     parser.add_argument('--hpc-python', default='/scratch/prj/eng_demt_robot_learning/robot-vla/.venv-hpc-service/bin/python')
     parser.add_argument('--dataset', default=None if WINDOWS else DATASET,
-                        help='Training dataset path (Windows defaults to local live cameras)')
+                        help='Explicit training dataset path (Windows defaults to local recordings)')
     parser.add_argument('--frame-mode', choices=frame_modes(), default=None if WINDOWS else 'pose')
     parser.add_argument('--demo', '--episode', dest='demo', type=int, help='Original demonstration number, starting at 1')
     if WINDOWS:
         parser.add_argument('--operator-config', type=Path, help='Use this Web operator configuration')
+        parser.add_argument('--recordings', type=Path, help='Local Sawyer recordings folder (defaults to the Web data directory)')
         parser.add_argument('--main-device', help='Override the configured main camera with a DirectShow name or index')
         parser.add_argument('--wrist-device', help='Override the configured wrist camera with sn9c20x, a DirectShow name or index')
         parser.add_argument('--list-cameras', action='store_true', help='List DirectShow devices without opening a stream')
@@ -813,8 +929,6 @@ def main(argv=None, default_operator_config=None):
     if not WINDOWS and not args.headless and not os.environ.get('DISPLAY'):
         parser.error('No DISPLAY; start in a desktop terminal or use --headless --seconds 10')
     if WINDOWS:
-        if args.dataset is None and (args.frame_mode is not None or args.demo is not None):
-            args.dataset = DATASET
         args.frame_mode = args.frame_mode or 'first'
         if args.operator_config is None:
             if default_operator_config is not None:

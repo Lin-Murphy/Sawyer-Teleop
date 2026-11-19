@@ -10,22 +10,22 @@
 .\Start-Camera-Compare.cmd
 ```
 
-先退出正在占用相机的 A、推理或预览进程，然后双击 `Start-Camera-Compare.cmd`。默认进入 **本机实时画面**，直接读取 USB 相机，无需启动 A/B、Quest 或 Docker。窗口复用 Web 的 `windows-local\config\operator.json` 和采集代码，采用相同的设备、分辨率、帧率、曝光、增益和颜色配置。Web 里已保存的设置在下次打开比对窗口时加载。
+先退出正在占用相机的 A、推理或预览进程，然后双击 `Start-Camera-Compare.cmd`。工具直接读取 USB 相机，无需启动 A/B、Quest 或 Docker。窗口复用 Web 的 `windows-local\config\operator.json` 和采集代码，采用相同的设备、分辨率、帧率、曝光、增益和颜色配置。Web 里已保存的设置在下次打开比对窗口时加载。
+
+**参考来源** 会列出 Web 录制目录里已有的批次（本机为 `windows-local\data`），默认打开首个批次。本机目前默认是 `batch_20261110_drawer_cube`。选定 **原始示范** 和 **首帧／末帧** 后，工具就从该条录制读取两路原始 RGB。两路参考帧按共同录制区间的起点或终点选取最接近的时间戳。可切换 **本机实时画面** 只看相机，或用 `--recordings` 指向其他 Sawyer 录制目录。上述操作均为离线。
 
 设备列表只枚举 DirectShow 设备。Sandberg SN9C201 使用 WinUSB，由配置选中。要临时更换设备，可传 `--main-device 2 --wrist-device 1`，索引以本机列表为准。临时指定的设备使用驱动默认成像设置。
 
-从 **参考来源** 选择训练数据集后，工具才读缓存或后台访问 SSH。可比对 **首帧** 或 **末帧**。若 SSH 超时，双路实时预览仍可用。实时 ROS 姿态匹配使用 [Ubuntu 入口](CAMERA_COMPARE.md)。
-
-未缓存的数据通过系统 OpenSSH 的 `create` 别名获取。按 [KCL CREATE 的 Windows SSH 指南](https://docs.er.kcl.ac.uk/CREATE/hpc/access/#connecting-to-create-hpc-using-ssh-on-windows) 配置别名、密钥及访问认证。用 `ssh -G create` 检查 `hostname` 应为 `hpc.create.kcl.ac.uk`，用 `ssh -o BatchMode=yes create exit` 检查免交互连接，修复连接后重开比对窗口。也可从 Ubuntu 复制完整的 `reference-cache` 目录（含需要的参考帧）到 `windows-local\camera-compare\reference-cache`，或用 `--ssh-host`、`--reference-cache` 指定其他配置。
+如需读取已导出的 HPC 训练集，可显式传入 `--dataset`。该模式用 `--reference-cache` 或 SSH 获取所需参考帧，设置见 [KCL CREATE 的 Windows SSH 指南](https://docs.er.kcl.ac.uk/CREATE/hpc/access/#connecting-to-create-hpc-using-ssh-on-windows)。实时 ROS 姿态匹配使用 [Ubuntu 入口](CAMERA_COMPARE.md)。
 
 按 **S** 或点 **保存截图**，按 **Q** 或 **Esc** 退出。截图和退出时保存的最后一帧位于 `windows-local\camera-compare\snapshots`。
 
 ```powershell
 .\Start-Camera-Compare.cmd --headless --seconds 20
-.\Start-Camera-Compare.cmd --dataset /scratch/prj/eng_demt_robot_learning/sawyer_finray_pi05_state7_alltrain_v1_2026-11-12/train --frame-mode last --demo 6
+.\Start-Camera-Compare.cmd --recordings '.\windows-local\data\batch_20261110_drawer_cube' --frame-mode last --demo 6
 ```
 
-本机模式并排显示主相机和腕相机。训练比对模式按列显示训练帧、当前帧、50% 叠加和差异热图。MAE、RMSE 和特征位移的含义见 [相机比对说明](CAMERA_COMPARE.md)。
+实时模式并排显示主相机和腕相机。比对模式按列显示录制参考、当前帧、50% 叠加和差异热图，截图同时记录每路参考帧的编号与时间戳。MAE、RMSE 和特征位移的含义见 [相机比对说明](CAMERA_COMPARE.md)。
 
 ## 机器人时钟自动测量（2026-11-07 起，取代下方手动恢复）
 
