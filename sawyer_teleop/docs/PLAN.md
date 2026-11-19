@@ -16,6 +16,8 @@ Windows 原生离线全套 1,033 通过、26 跳过，含相机专项 13 项；U
 
 [源码、测试输入和参数哈希](../../windows-local/artifacts/camera-compare-windows-20261119/sha256.json)，[原生测试报告](../../windows-local/artifacts/camera-compare-windows-20261119/native-suite.xml)，[桌面测试结果](../../windows-local/artifacts/camera-compare-windows-20261119/gui-smoke.txt)。
 
+Windows 另提供可双击的 `Start-Camera-Compare.cmd`。沿用独立比对工具的参数，A/B 无需重启。已验证 `--help`、`--list-cameras` 和非法参数退出码 2。
+
 ### 推理前双相机参考对比（2026-11-19）
 
 **仅新增 Ubuntu 操作端入口。** 使用 `Start-Camera-Compare.sh` 独立查看实时双路 RGB 和训练帧，按原始示范 01–30 选择首帧、末帧或姿态最近帧，并查看 50% 叠加和差异热图。工具只读取相机和 ROS 反馈，B 无需升级、重启或重新校准。参考缓存和截图保存在本机。已用真实训练帧及保存的实拍画面验证界面切换、跨分段首尾帧和缺帧状态。本次移植在离线输入上验证，现场使用见 [CAMERA_COMPARE](CAMERA_COMPARE.md)。

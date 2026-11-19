@@ -51,6 +51,7 @@ Ubuntu 操作端和实验室实机 B 的安装见 [SETUP](sawyer_teleop/docs/SET
 | `Start-A.cmd` | 启动 A（Web 操作台）；可加 `--port N`、`--no-browser` |
 | `Start-B.cmd` | 启动本机 Gazebo B；`--headless` 无画面，`--stop` 停止，`--check` 只检查 |
 | `Stop-B.cmd` | 停止本机 Gazebo B（同 `Start-B.cmd --stop`） |
+| `Start-Camera-Compare.cmd` | 打开独立的双相机比对窗口 |
 | `Test.cmd` | 全套离线测试；`ik` / `lab-scene` / `feedback-delay` / `env` 为专项检查 |
 
 **Ubuntu**（`sawyer_teleop/scripts/ubuntu/`）：`Start-A.sh`、`Start-B-Sim.sh`、`Start-B-Real.sh`、`Start-Camera-Compare.sh`。
