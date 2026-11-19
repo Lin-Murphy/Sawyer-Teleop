@@ -34,8 +34,8 @@ FRAME_MODES = {'pose': '按实测姿态匹配', 'first': '首帧', 'last': '末�
 ALL_DEMOS = '全部示范'
 MAIN = '/dev/v4l/by-id/usb-Intel_R__RealSense_TM__Depth_Camera_435_Intel_R__RealSense_TM__Depth_Camera_435_345423020748-video-index0'
 WRIST = '/dev/v4l/by-id/usb-0c45_USB20_Camera-video-index0'
-WINDOWS_MAIN = 'Intel(R) RealSense(TM) Depth Camera 435 with RGB Module RGB'
 WINDOWS_WRIST = 'sn9c20x'
+LOCAL_LIVE_LABEL = '本机实时画面'
 RESIZE_SHA = 'd48b4bd7f44e79fe6db8a8e07c9161144fa250be686e1245014a8b47e6171977'
 
 
@@ -128,7 +128,6 @@ class References:
     def __init__(self, cache, host, python, dataset):
         self.host, self.python, self.dataset = host, python, dataset
         self.cache = cache if dataset == DATASET else cache / hashlib.sha256(dataset.encode()).hexdigest()[:24]
-        self.cache.mkdir(parents=True, exist_ok=True)
         self.process_lock = threading.Lock()
         self.active_process = None
         self.closing = False
@@ -359,10 +358,10 @@ class NativeCamera:
 
 
 class WindowsCamera:
-    def __init__(self, role, device, backend):
+    def __init__(self, **settings):
         from .cameras import Camera
-        self.device, self.backend = device, backend
-        self.camera = Camera(name=role, device=device, backend=backend).start()
+        self.device, self.backend = settings['device'], settings.get('backend', 'auto')
+        self.camera = Camera(**dict(settings, reconnect=True)).start()
 
     def latest(self):
         frame = self.camera.latest()
@@ -375,6 +374,42 @@ class WindowsCamera:
 
     def close(self):
         self.camera.close()
+
+
+def windows_camera_settings(args):
+    from .cameras import resolve_device
+
+    operator = json.loads(args.operator_config.read_text(encoding='utf-8'))
+    configured = {camera['name']: camera for camera in operator.get('cameras', [])}
+    settings = {}
+    devices = []
+    for role, override, names in (
+        ('main', args.main_device, ('realsense', 'main', 'front')),
+        ('wrist', args.wrist_device, ('wrist',)),
+    ):
+        if override is None:
+            camera = next((configured[name] for name in names if name in configured), None)
+            if camera is None:
+                raise ValueError(f'No {role} camera in {args.operator_config}; use --{role}-device to select one')
+        elif role == 'wrist' and override == WINDOWS_WRIST:
+            camera = dict(name=role, device=override, backend='sn9c20x')
+        else:
+            device = int(override) if override.isdigit() else override
+            camera = dict(name=role, device=device, backend='dshow')
+        backend = camera.get('backend', 'auto')
+        if backend == 'sn9c20x':
+            devices.append(('sn9c20x',))
+        else:
+            try:
+                device = resolve_device(camera['device'], backend)
+            except RuntimeError:
+                # The camera thread reports missing devices and can reconnect.
+                device = camera['device'], backend
+            devices.append(device)
+        settings[role] = camera
+    if devices[0] == devices[1]:
+        raise ValueError('Main and wrist must use different cameras')
+    return settings
 
 
 def text(canvas, message, x, y, color=(230, 230, 230), scale=.5):
@@ -406,7 +441,7 @@ class CompareWindow:
         self.demo_options = None
         bar = ttk.Frame(self.root, padding=(12, 8))
         bar.pack(fill='x')
-        ttk.Label(bar, text='参考数据集').pack(side='left', padx=(0, 5))
+        ttk.Label(bar, text='参考来源' if WINDOWS else '参考数据集').pack(side='left', padx=(0, 5))
         self.dataset = ttk.Combobox(bar, values=list(self.datasets), width=40, state='readonly')
         self.dataset.set(datasets[dataset])
         self.dataset.pack(side='left', padx=(0, 14))
@@ -416,7 +451,8 @@ class CompareWindow:
         self.mode.pack(side='left', padx=(0, 14))
         ttk.Label(bar, text='原始示范').pack(side='left', padx=(0, 5))
         self.demo = ttk.Combobox(bar, width=26, state='disabled')
-        self.demo.set(ALL_DEMOS if demo is None else str(demo))
+        if dataset is not None:
+            self.demo.set(ALL_DEMOS if demo is None else str(demo))
         self.demo.pack(side='left', padx=(0, 14))
         ttk.Button(bar, text='保存截图', command=self.request_save).pack(side='left')
         self.preview = tk.Label(self.root, bg='#181818', borderwidth=0)
@@ -441,11 +477,14 @@ class CompareWindow:
 
     def choices(self):
         selected = self.demo.get()
-        demo = None if selected == ALL_DEMOS else int(selected.split()[0])
+        demo = None if selected in ('', ALL_DEMOS) else int(selected.split()[0])
         return self.datasets[self.dataset.get()], self.modes[self.mode.get()], demo
 
     def set_demos(self, refs, mode):
-        if not refs.loaded:
+        self.mode.configure(state='disabled' if refs is None else 'readonly')
+        if refs is None:
+            self.demo.set('')
+        if refs is None or not refs.loaded:
             self.demo.configure(state='disabled')
             self.demo_options = None
             return
@@ -478,9 +517,12 @@ class CompareWindow:
 
 def run(args):
     datasets = dict(DATASETS)
+    if WINDOWS:
+        datasets = {None: LOCAL_LIVE_LABEL, **datasets}
     datasets.setdefault(args.dataset, args.dataset)
-    readers = {path: References(args.reference_cache, args.ssh_host, args.hpc_python, path) for path in datasets}
-    initial_refs = readers[args.dataset]
+    readers = {path: References(args.reference_cache, args.ssh_host, args.hpc_python, path)
+               for path in datasets if path is not None}
+    initial_refs = readers.get(args.dataset)
     out = args.output / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
     ros = None
     cameras = {}; executor = ThreadPoolExecutor(max_workers=1)
@@ -493,23 +535,15 @@ def run(args):
     seen_cameras = set()
     camera_errors = {}
     try:
-        if not WINDOWS or args.headless:
+        if initial_refs is not None and (not WINDOWS or args.headless):
             print('Loading actual training pose index (first run uses read-only SSH)...', flush=True)
             initial_refs.load_index()
             if args.demo is not None and args.demo not in initial_refs.demos:
                 raise ValueError(f'Original demo {args.demo} is unknown in {args.dataset}')
         out.mkdir(parents=True)
         if WINDOWS:
-            from .cameras import resolve_device
-            main_device = resolve_device(args.main_device, 'dshow')
-            if args.wrist_device == WINDOWS_WRIST:
-                wrist_device = args.wrist_device, 'sn9c20x'
-            else:
-                wrist_device = resolve_device(args.wrist_device, 'dshow')
-            if main_device == wrist_device:
-                raise ValueError('Main and wrist must use different cameras')
-            cameras['main'] = WindowsCamera('main', *main_device)
-            cameras['wrist'] = WindowsCamera('wrist', *wrist_device)
+            for role, settings in windows_camera_settings(args).items():
+                cameras[role] = WindowsCamera(**settings)
         else:
             ros = RosReadOnly(args.main_topic, args.wrist_topic)
         if ros is not None and not (args.main_topic and args.wrist_topic):
@@ -537,11 +571,11 @@ def run(args):
                 dataset, mode, demo = window.choices()
             else:
                 dataset, mode, demo = args.dataset, args.frame_mode, args.demo
-            refs = readers[dataset]
+            refs = readers.get(dataset)
             if window:
                 window.set_demos(refs, mode)
                 _, _, demo = window.choices()
-            elif mode != 'pose' and demo is None:
+            elif refs is not None and mode != 'pose' and demo is None:
                 demo = next(number for number, rows in refs.demo_rows.items() if rows.size)
             choice = dataset, mode, demo
             if choice != previous_choice:
@@ -570,7 +604,9 @@ def run(args):
                         reference_error = str(e).strip() or type(e).__name__
                         status = 'REFERENCE ERROR: ' + reference_error.splitlines()[-1]
                 future = None
-            if not refs.loaded:
+            if refs is None:
+                status = 'Local cameras | Select a training dataset to load reference images'
+            elif not refs.loaded:
                 if future is None and requested != 'index':
                     requested = 'index'; future_choice = choice
                     future = executor.submit(refs.load_index)
@@ -591,10 +627,13 @@ def run(args):
                     future = executor.submit(refs.images, *selected)
                     status = 'Loading verified training PNG ep%d/frame%d' % selected
             canvas = np.full((790, 1240, 3), 24, np.uint8)
-            text(canvas, 'READ ONLY | Q/Esc quit | S save raw + comparison | Space freeze reference | no camera controls', 14, 24)
+            shortcuts = 'Q/Esc quit | S save RGB' if refs is None else 'Q/Esc quit | S save raw + comparison'
+            if mode == 'pose':
+                shortcuts += ' | Space freeze reference'
+            text(canvas, shortcuts, 14, 24)
             latest = {}; comparison = {}
             for ri, role in enumerate(('main', 'wrist')):
-                y = 88 + ri * 330
+                x, y = (14 + ri * 612, 106) if refs is None else (14, 88 + ri * 330)
                 try:
                     if role not in topic_images and role not in cameras:
                         raise RuntimeError('Waiting for existing RGB8/BGR8 ROS image topic')
@@ -602,9 +641,14 @@ def run(args):
                     age = (camera_clock() - meta['received_monotonic_ns']) / 1e6
                     if age > 250: raise RuntimeError('STALE camera %.0fms' % age)
                     if native.shape != (480, 640, 3): raise RuntimeError('Expected unchanged native 640x480 RGB stream')
-                    current = refs.resize(native, 224, 224).copy() if refs.loaded else preview_rgb(native)
+                    current = refs.resize(native, 224, 224).copy() if refs is not None and refs.loaded else preview_rgb(native)
                     latest[role] = (native, current, meta)
                     seen_cameras.add(role)
+                    if refs is None:
+                        text(canvas, f'{role.upper()} | {age:.0f} ms', x, y - 12)
+                        live = cv2.resize(native, (590, 442), interpolation=cv2.INTER_AREA)
+                        canvas[y:y + 442, x:x + 590] = cv2.cvtColor(live, cv2.COLOR_RGB2BGR)
+                        continue
                     usable = reference is not None and (valid_pose or mode != 'pose')
                     if usable:
                         ref = reference[0][role]
@@ -635,7 +679,7 @@ def run(args):
                     if ros is not None and role in cameras and cameras[role].process.poll() is not None:
                         raise
                     camera_errors[role] = str(e)
-                    text(canvas, role.upper() + ': ' + str(e)[:130], 14, y + 100, (50, 100, 255))
+                    text(canvas, role.upper() + ': ' + str(e)[:90 if refs is None else 130], x, y + 100, (50, 100, 255))
             if now - last_feature > 1: last_feature = now
             pose_error = None
             if reference is not None:
@@ -653,14 +697,15 @@ def run(args):
                     status += ' | FROZEN'
             status_color = (90, 220, 90) if pose_error and pose_error['near'] else (50, 160, 255)
             text(canvas, status[:160], 14, 57, status_color, .47)
-            text(canvas, 'Dataset | ' + datasets[dataset], 14, 746, scale=.48)
+            if refs is not None:
+                text(canvas, 'Dataset | ' + datasets[dataset].replace(' · ', ' / '), 14, 746, scale=.48)
             if WINDOWS and reference_error:
                 text(canvas, 'Live preview only. Check SSH or the local reference cache, then reopen the tool.',
                      14, 773, scale=.48)
             last_frame = dict(canvas=canvas, latest=latest, comparison=comparison, records=records,
                               pose_error=pose_error, reference_error=reference_error,
                               selection={'dataset': dataset, 'mode': mode, 'demo_number': demo,
-                                                               'source_episode': refs.demos.get(demo) if refs.loaded else None})
+                                         'source_episode': refs.demos.get(demo) if refs is not None and refs.loaded else None})
             frames += 1
             if window:
                 window.show(canvas)
@@ -700,7 +745,7 @@ def save(directory, frame, reference):
                    reference_error=frame['reference_error'],
                    reference_selection=frame['selection'], cameras=frame['comparison'], raw_ros_observations=frame['records'],
                    reference=reference[1] if reference else None, saved_utc=datetime.now(timezone.utc).isoformat(),
-                   preprocessing=('Pinned OpenPI RGB224 bilinear letterbox; no registration/flip/photometric correction'
+                   preprocessing=('Pinned OpenPI RGB224 bilinear letterbox of captured RGB'
                                   if frame['comparison'] else 'Live preview; no training comparison'),
                    feature_coordinates='224x224 RGB image pixels; y includes 28-row padding; current minus reference')
     (directory / 'observation.json').write_text(json.dumps(payload, indent=2))
@@ -729,19 +774,21 @@ def frame_modes():
     return {mode: FRAME_MODES[mode] for mode in ('first', 'last')} if WINDOWS else FRAME_MODES
 
 
-def main(argv=None):
+def main(argv=None, default_operator_config=None):
     parser = argparse.ArgumentParser(description=__doc__)
     local_home = Path(os.environ.get('SAWYER_LOCAL_HOME', 'windows-local' if WINDOWS else 'ubuntu-local')).expanduser()
     parser.add_argument('--reference-cache', type=Path, default=local_home / 'camera-compare/reference-cache')
     parser.add_argument('--output', type=Path, default=local_home / 'camera-compare/snapshots')
     parser.add_argument('--ssh-host', default='create')
     parser.add_argument('--hpc-python', default='/scratch/prj/eng_demt_robot_learning/robot-vla/.venv-hpc-service/bin/python')
-    parser.add_argument('--dataset', default=DATASET)
-    parser.add_argument('--frame-mode', choices=frame_modes(), default='first' if WINDOWS else 'pose')
+    parser.add_argument('--dataset', default=None if WINDOWS else DATASET,
+                        help='Training dataset path (Windows defaults to local live cameras)')
+    parser.add_argument('--frame-mode', choices=frame_modes(), default=None if WINDOWS else 'pose')
     parser.add_argument('--demo', '--episode', dest='demo', type=int, help='Original demonstration number, starting at 1')
     if WINDOWS:
-        parser.add_argument('--main-device', default=WINDOWS_MAIN, help='DirectShow name or index')
-        parser.add_argument('--wrist-device', default=WINDOWS_WRIST, help='sn9c20x (WinUSB), DirectShow name or index')
+        parser.add_argument('--operator-config', type=Path, help='Use this Web operator configuration')
+        parser.add_argument('--main-device', help='Override the configured main camera with a DirectShow name or index')
+        parser.add_argument('--wrist-device', help='Override the configured wrist camera with sn9c20x, a DirectShow name or index')
         parser.add_argument('--list-cameras', action='store_true', help='List DirectShow devices without opening a stream')
     else:
         parser.add_argument('--main-device', default=MAIN); parser.add_argument('--wrist-device', default=WRIST)
@@ -765,6 +812,17 @@ def main(argv=None):
     if args.headless and args.seconds is None: parser.error('--headless requires --seconds')
     if not WINDOWS and not args.headless and not os.environ.get('DISPLAY'):
         parser.error('No DISPLAY; start in a desktop terminal or use --headless --seconds 10')
+    if WINDOWS:
+        if args.dataset is None and (args.frame_mode is not None or args.demo is not None):
+            args.dataset = DATASET
+        args.frame_mode = args.frame_mode or 'first'
+        if args.operator_config is None:
+            if default_operator_config is not None:
+                args.operator_config = default_operator_config()
+            else:
+                args.operator_config = local_home / 'config/operator.json'
+                if not args.operator_config.is_file():
+                    args.operator_config = Path(__file__).resolve().parents[2] / 'config/operator.json'
     run(args)
 
 

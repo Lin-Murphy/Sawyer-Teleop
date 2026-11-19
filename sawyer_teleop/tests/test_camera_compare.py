@@ -157,11 +157,12 @@ def test_windows_compares_both_streams_without_ros_and_saves_unicode_paths(tmp_p
 
     output = tmp_path / '相机对比'
     compare.main(['--headless', '--seconds', '1', '--main-device', '2', '--frame-mode', 'last',
-                  '--demo', '1', '--reference-cache', str(references.cache), '--output', str(output)])
+                  '--wrist-device', 'sn9c20x', '--dataset', compare.DATASET, '--demo', '1',
+                  '--reference-cache', str(references.cache), '--output', str(output)])
 
     assert [device.config for device in devices] == [
-        dict(name='main', device=2, backend='dshow'),
-        dict(name='wrist', device='sn9c20x', backend='sn9c20x'),
+        dict(name='main', device=2, backend='dshow', reconnect=True),
+        dict(name='wrist', device='sn9c20x', backend='sn9c20x', reconnect=True),
     ]
     assert all(device.closed for device in devices)
     final = next(output.glob('*/final'))
@@ -181,7 +182,7 @@ def test_windows_window_keeps_live_preview_after_ssh_timeout(tmp_path, monkeypat
     monkeypatch.setattr(compare, 'WINDOWS', True)
 
     class Capture:
-        def __init__(self, *args):
+        def __init__(self, **settings):
             pass
 
         def latest(self):
@@ -220,7 +221,8 @@ def test_windows_window_keeps_live_preview_after_ssh_timeout(tmp_path, monkeypat
     monkeypatch.setattr(compare, 'CompareWindow', Window)
     monkeypatch.setattr(compare.References, 'fetch', fail_ssh)
     output = tmp_path / 'output'
-    compare.main(['--seconds', '1', '--main-device', '2',
+    compare.main(['--seconds', '1', '--main-device', '2', '--wrist-device', 'sn9c20x',
+                  '--dataset', compare.DATASET,
                   '--reference-cache', str(tmp_path / 'empty-cache'), '--output', str(output)])
 
     final = next(output.glob('*/final'))
@@ -231,3 +233,44 @@ def test_windows_window_keeps_live_preview_after_ssh_timeout(tmp_path, monkeypat
     for role in ('main', 'wrist'):
         assert (final / f'{role}_native_rgb.png').is_file()
         assert not (final / f'{role}_diff_heatmap.png').exists()
+
+
+def test_windows_default_uses_web_camera_settings_without_loading_training(tmp_path, monkeypatch):
+    monkeypatch.setattr(compare, 'WINDOWS', True)
+    web_cameras = [
+        dict(name='wrist', device='usb:0c45:627b', backend='sn9c20x', fps=20,
+             controls=dict(exposure=99, gain=3)),
+        dict(name='realsense', device=2, backend='dshow', fps=20, source_fps=30,
+             controls=dict(auto_exposure=True, gain=0)),
+    ]
+    config = tmp_path / 'operator.json'
+    config.write_text(json.dumps({'cameras': web_cameras}), encoding='utf-8')
+    opened = []
+
+    class Capture:
+        def __init__(self, **settings):
+            opened.append(settings)
+
+        def latest(self):
+            return np.full((480, 640, 3), 42, np.uint8), dict(received_monotonic_ns=time.perf_counter_ns())
+
+        def close(self):
+            pass
+
+    def no_training(*args):
+        pytest.fail('Local camera preview must never request training data')
+
+    monkeypatch.setattr(compare, 'WindowsCamera', Capture)
+    monkeypatch.setattr(compare.References, 'load_index', no_training)
+    output = tmp_path / 'output'
+    cache = tmp_path / 'unused-cache'
+    compare.main(['--headless', '--seconds', '.25', '--output', str(output), '--reference-cache', str(cache)],
+                 default_operator_config=lambda: config)
+
+    assert opened == list(reversed(web_cameras))
+    assert not cache.exists()
+    final = next(output.glob('*/final'))
+    observation = json.loads((final / 'observation.json').read_text(encoding='utf-8'))
+    assert observation['reference_error'] is None
+    assert observation['reference_selection']['dataset'] is None
+    assert all((final / f'{role}_native_rgb.png').is_file() for role in ('main', 'wrist'))

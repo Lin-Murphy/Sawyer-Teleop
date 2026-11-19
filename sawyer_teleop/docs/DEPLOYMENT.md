@@ -10,22 +10,22 @@
 .\Start-Camera-Compare.cmd
 ```
 
-先退出正在占用相机的 A、推理程序或预览工具，然后可直接双击 `Start-Camera-Compare.cmd`。对比窗口独立运行，无需启动 A/B、Quest 或 Docker。主相机默认选 RealSense D435 的 **RGB** 设备，腕相机默认用 Sandberg SN9C201（`0c45:627b`）和已有 WinUSB 驱动。默认请求 640×480 RGB。列表只枚举 DirectShow 设备，WinUSB 腕相机不会出现在其中。若使用其他相机，可按该列表传入名称或索引，例如 `--main-device 2 --wrist-device 1`，索引以本机列表为准。
+先退出正在占用相机的 A、推理或预览进程，然后双击 `Start-Camera-Compare.cmd`。默认进入 **本机实时画面**，直接读取 USB 相机，无需启动 A/B、Quest 或 Docker。窗口复用 Web 的 `windows-local\config\operator.json` 和采集代码，采用相同的设备、分辨率、帧率、曝光、增益和颜色配置。Web 里已保存的设置在下次打开比对窗口时加载。
 
-Windows 使用独立采集会话。DirectShow 会协商视频格式，SN9C201 在打开时按驱动默认值初始化传感器（含曝光和增益）。训练参考使用原始训练 PNG，实时图不套用 A 的颜色校正。界面提供 **首帧** 和 **末帧**，可切换数据集与原始示范号；使用实时 ROS 姿态自动匹配时请用 [Ubuntu 入口](CAMERA_COMPARE.md)。
+设备列表只枚举 DirectShow 设备。Sandberg SN9C201 使用 WinUSB，由配置选中。要临时更换设备，可传 `--main-device 2 --wrist-device 1`，索引以本机列表为准。临时指定的设备使用驱动默认成像设置。
 
-Windows 窗口会先显示实时画面，后台加载训练参考。若 SSH 超时或参考不可用，窗口继续显示双路预览并提示原因。训练图、叠加图、热图和指标会在验证参考帧后显示。命令行 `--headless` 检查仍要求能加载训练索引。
+从 **参考来源** 选择训练数据集后，工具才读缓存或后台访问 SSH。可比对 **首帧** 或 **末帧**。若 SSH 超时，双路实时预览仍可用。实时 ROS 姿态匹配使用 [Ubuntu 入口](CAMERA_COMPARE.md)。
 
 未缓存的数据通过系统 OpenSSH 的 `create` 别名获取。按 [KCL CREATE 的 Windows SSH 指南](https://docs.er.kcl.ac.uk/CREATE/hpc/access/#connecting-to-create-hpc-using-ssh-on-windows) 配置别名、密钥及访问认证。用 `ssh -G create` 检查 `hostname` 应为 `hpc.create.kcl.ac.uk`，用 `ssh -o BatchMode=yes create exit` 检查免交互连接，修复连接后重开比对窗口。也可从 Ubuntu 复制完整的 `reference-cache` 目录（含需要的参考帧）到 `windows-local\camera-compare\reference-cache`，或用 `--ssh-host`、`--reference-cache` 指定其他配置。
 
 按 **S** 或点 **保存截图**，按 **Q** 或 **Esc** 退出。截图和退出时保存的最后一帧位于 `windows-local\camera-compare\snapshots`。
 
 ```powershell
-.\Start-Camera-Compare.cmd --frame-mode last --demo 6
 .\Start-Camera-Compare.cmd --headless --seconds 20
+.\Start-Camera-Compare.cmd --dataset /scratch/prj/eng_demt_robot_learning/sawyer_finray_pi05_state7_alltrain_v1_2026-11-12/train --frame-mode last --demo 6
 ```
 
-窗口按行显示主相机和腕相机，按列显示训练帧、当前帧、50% 叠加和差异热图。MAE、RMSE 和特征位移的含义见 [相机比对说明](CAMERA_COMPARE.md)。
+本机模式并排显示主相机和腕相机。训练比对模式按列显示训练帧、当前帧、50% 叠加和差异热图。MAE、RMSE 和特征位移的含义见 [相机比对说明](CAMERA_COMPARE.md)。
 
 ## 机器人时钟自动测量（2026-11-07 起，取代下方手动恢复）
 

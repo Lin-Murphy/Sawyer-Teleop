@@ -115,7 +115,7 @@ def main():
                 raise
             print("Camera comparison needs Pillow. See sawyer_teleop/docs/DEPLOYMENT.md.", file=sys.stderr)
             return 1
-        camera_compare(sys.argv[2:])
+        camera_compare(sys.argv[2:], default_operator_config=operator_config)
         return 0
 
     parser = argparse.ArgumentParser()

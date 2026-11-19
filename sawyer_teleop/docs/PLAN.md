@@ -20,6 +20,8 @@ Windows 另提供可双击的 `Start-Camera-Compare.cmd`。沿用独立比对工
 
 Windows 双击启动曾因读取 `create:22` 超时而在显示窗口前退出。本机 `ssh -G create` 显示主机名仍为 `create`，标准缓存目录缺训练索引。现将 Windows 窗口的参考加载移到后台，失败时保留双路预览和截图，只有通过校验的参考才参与比对。相机专项 14 项通过，Windows Tk 用合成双路输入验证超时路径和有缓存路径。真实参考仍需配置 CREATE SSH 或复制缓存，参见 [DEPLOYMENT](DEPLOYMENT.md#windows-相机对比)。[测试和哈希](../../windows-local/artifacts/camera-compare-ssh-timeout-20261119/)。
 
+用户确认相机直连 Windows，要求与 Web 共用采集逻辑。**仅更新 A 侧工具。** 双击默认并排显示本机两路 RGB，复用 Web 的 `operator.json` 和采集类（含成像设置及重连），选择训练数据集后才读参考缓存或请求 SSH。现机腕相机配置为曝光 99、增益 3。专项 15 项通过，Windows Tk 用本机配置和合成画面验证默认零 SSH、双路保存及训练缓存路径。实拍亮度待现场确认。操作见 [DEPLOYMENT](DEPLOYMENT.md#windows-相机对比)。[验证与哈希](../../windows-local/artifacts/camera-compare-local-cameras-20261119/)。
+
 ### 推理前双相机参考对比（2026-11-19）
 
 **仅新增 Ubuntu 操作端入口。** 使用 `Start-Camera-Compare.sh` 独立查看实时双路 RGB 和训练帧，按原始示范 01–30 选择首帧、末帧或姿态最近帧，并查看 50% 叠加和差异热图。工具只读取相机和 ROS 反馈，B 无需升级、重启或重新校准。参考缓存和截图保存在本机。已用真实训练帧及保存的实拍画面验证界面切换、跨分段首尾帧和缺帧状态。本次移植在离线输入上验证，现场使用见 [CAMERA_COMPARE](CAMERA_COMPARE.md)。
