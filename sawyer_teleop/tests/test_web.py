@@ -7,6 +7,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 import h5py
+import numpy as np
 import pytest
 
 from sawyer_teleop.episode_store import open_episode
@@ -76,6 +77,32 @@ def test_direct_pose_is_listed_in_existing_web_motion_options(web):
     assert 'standard' in profiles and 'intera_cartesian_50hz' in profiles
     assert profiles['intera_pose_50hz']['label'] == 'Direct pose (50 Hz, experimental)'
     assert profiles['intera_pose_50hz']['reason']  # Fake backend cannot execute this native option.
+
+
+def test_translation_ratio_sets_cartesian_target_and_persists(web, monkeypatch):
+    s, bridge, _, _ = web
+    monkeypatch.setattr('sawyer_teleop.web_session.connection_ports',
+                        lambda backend: (bridge.control_port, bridge.ik_port))
+    monkeypatch.setattr('sawyer_teleop.web_session.QuestInput', lambda *_: SyntheticQuest())
+    s.operator_factory = s._make_operator
+    defaults = s.snapshot(OWNER)['defaults']
+    assert [option['label'] for option in defaults['position_scales']] == [
+        '0.5', '0.6', '0.7', '0.75', '0.8', '0.9', '1.0']
+    for option in defaults['position_scales']:
+        assert option['value'] == 1.0 / float(option['label'])
+
+    assert s.command(OWNER, 1, 'connect', dict(backend='fake', host='127.0.0.1', position_scale=1.25))['ok']
+    until(s, lambda snap: snap['phase'] == 'connected')
+    assert json.loads(s.path.read_text())['position_scale'] == 1.25
+    assert s.snapshot(OWNER)['defaults']['position_scale'] == 1.25
+    s.operator.mapping = np.eye(3)
+    s.operator.vr_origin = np.eye(4)
+    s.operator.robot_origin = np.eye(4)
+    hand = np.eye(4)
+    hand[0, 3] = .08
+    target = s.operator._target_pose({'transform': hand})
+    assert target['p'] == pytest.approx([.10, 0, 0])
+    assert target['q'] == pytest.approx([0, 0, 0, 1])
 
 
 def test_ownership_and_idempotent_commands(web):
@@ -199,7 +226,8 @@ def test_unknown_actions_and_replay_after_eviction_are_rejected(web):
 
 
 @pytest.mark.parametrize('action,options', [('connect', {'backend': []}),
-    ('connect', {'profile': {}}), ('apply_motion', {'profile': [], 'joint_protection': True})])
+    ('connect', {'profile': {}}), ('connect', {'position_scale': True}),
+    ('connect', {'position_scale': 0.8}), ('apply_motion', {'profile': [], 'joint_protection': True})])
 def test_malformed_options_return_errors_without_ending_service(web, action, options):
     s, _, _, _ = web
     assert not s.command(OWNER, 1, action, options)['ok']

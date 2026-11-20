@@ -33,6 +33,9 @@ from .quest import QuestInput
 from .quest_connection import QuestConnection
 
 
+POSITION_RATIOS = (0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0)
+
+
 class SessionError(ValueError):
     pass
 
@@ -132,6 +135,8 @@ class WebSession:
                     host=history[0] if history else self.config.get('robot_host', ''), history=history,
                     serial=self.config.get('quest_serial') or '',
                     smoothing=motion.get('enabled', False), smoothing_ms=motion.get('time_constant_ms', 40.0),
+                    position_scale=self.config.get('position_scale', 1.0),
+                    position_scales=[dict(label=str(ratio), value=1/ratio) for ratio in POSITION_RATIOS],
                     profile=selected_motion_profile(self.config.get('motion_profile'),
                         self.config.get('gazebo_max_acceleration_rad_s2')),
                     joint_protection=self.config.get('joint_protection_enabled', True),
@@ -285,7 +290,8 @@ class WebSession:
             return result
 
     def _settings(self, options):
-        settings = dict(self.defaults(), **options)
+        defaults = self.defaults()
+        settings = dict(defaults, **options)
         if not isinstance(settings['backend'], str) or settings['backend'] not in dict(BACKENDS):
             raise SessionError('Unknown backend.')
         for key in ('host', 'serial'):
@@ -301,6 +307,11 @@ class WebSession:
         original = self.config.get('motion', {}).get('time_constant_ms', 40.)
         if type(tau) not in (int, float) or not math.isfinite(tau) or tau not in (20., 40., 150., original):
             raise SessionError('Select Light, Heavy, DROID-like, or the existing custom smoothing value.')
+        scale = settings['position_scale']
+        allowed_scales = [option['value'] for option in defaults['position_scales']]
+        allowed_scales.append(defaults['position_scale'])
+        if type(scale) not in (int, float) or scale not in allowed_scales or not 0 < scale < math.inf:
+            raise SessionError('Select a listed translation ratio.')
         if not isinstance(settings['profile'], str) or settings['profile'] not in MOTION_PROFILES:
             raise SessionError('Unknown motion option.')
         # Normalize backend choices. Real fast limits are selected independently in Operator.
@@ -322,7 +333,7 @@ class WebSession:
             QuestInput(settings['serial'] or None, self.config.get('adb', 'adb')),
             self.cameras.views() if settings['cameras'] else [],
             self.defaults()['output'], self.config.get('operator_hz', 50),
-            self.config.get('position_scale', 1.),
+            settings['position_scale'],
             dict(self.config.get('motion', {}), enabled=settings['smoothing'], time_constant_ms=settings['smoothing_ms']),
             self.config.get('trajectory'), self.config.get('gazebo_max_acceleration_rad_s2'),
             settings['profile'], joint_protection=settings['joint_protection'],
@@ -343,7 +354,8 @@ class WebSession:
         self._save(connection_backend=settings['backend'], quest_serial=settings['serial'] or None,
             control_port=control, ik_port=ik, record_cameras_enabled=settings['cameras'],
             motion=dict(self.config.get('motion', {}), enabled=settings['smoothing'], time_constant_ms=settings['smoothing_ms']),
-            motion_profile=settings['profile'], joint_protection_enabled=settings['joint_protection'])
+            position_scale=settings['position_scale'], motion_profile=settings['profile'],
+            joint_protection_enabled=settings['joint_protection'])
         self.display.set_serial(settings['serial'] or None)
         self.phase, self.message, self.pending_host = 'connecting', 'Connecting B and Quest…', settings['host']
         self.job += 1

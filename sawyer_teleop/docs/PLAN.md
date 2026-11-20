@@ -8,6 +8,23 @@
 
 ## 当前决定
 
+### Web 平移比例新增 0.75（2026-11-19）
+
+**仅更新 A。** 在 0.7 和 0.8 之间新增 0.75，手柄 7.5 cm 对应末端目标 10 cm。重开 A 后选档，连接并校准。按用户要求跳过验证。
+
+### Web 遥操平移比例（2026-11-19）
+
+**仅更新 A。** Connections 新增 Translation ratio，提供 0.5 / 0.6 / 0.7 / 0.8 / 0.9 / 1.0。
+档位表示手柄位移除以机械臂目标位移。0.8 把 8 cm 手柄位移映射到 10 cm 的末端目标位移。
+选择在连接时写入原有 `position_scale`，默认沿用 1.0，已有自定义倍率可继续使用。
+重开 A 加载界面。会话内换档需断开、选档、重连并校准。复用原平移映射和录制元数据，旋转、协议、依赖和保护参数沿用原逻辑。
+
+Chrome + 隔离软件 B 验证六档、0.8 连接时锁定、刷新恢复，软件回归确认 0.8 对应 1.25 倍目标平移。
+全部 7,177 条固定实验室输入、旧横移 / 抬手离线门通过。全套测试 1,019 通过、23 跳过、1 项停手时序失败。
+Web、固定录制和停手专项复跑 69 项全部通过，包含首次失败的松手时序用例。
+Docker 前置检查超时后结束，未启动 Gazebo B。ADB 设备列表为空，完整 VR 链路待有 Quest 的隔离 Gazebo 环境验证。
+[输入、参数与源码哈希](../../windows-local/artifacts/translation-ratio-20261119/sha256.json)、[全套报告](../../windows-local/artifacts/translation-ratio-20261119/local.xml)、[专项报告](../../windows-local/artifacts/translation-ratio-20261119/verify.xml)。
+
 ### Windows 双相机参考对比（2026-11-19）
 
 **仅更新 A 侧的独立工具。** 本机 `main` 从远端主线 `bd14225` 快进整合 `codex/camera-compare` 的 `7627dc5`，再增加 Windows 入口 `Start-A.cmd camera-compare`。沿用项目 DirectShow 和 SN9C20x/WinUSB 采集，Windows 可按原始示范查看首帧、末帧，使用相同的训练图校验、叠加和差异指标。ROS 姿态匹配和话题输入继续使用 Ubuntu 入口。Windows 比对工具需要 Pillow，默认采集时由 WinUSB 驱动初始化腕相机。A/B 遥操无需重启或重校准。安装和启动见 [DEPLOYMENT](DEPLOYMENT.md#windows-相机对比)。

@@ -30,7 +30,9 @@
           <div class="separator"></div>
           <label class="check"><input type="checkbox" id="smoothing" data-connection> Smooth teleop</label>
           <label class="compact-label">Strength<select id="smoothingMs" data-connection><option value="20">Light · 20 ms</option><option value="40">Heavy · 40 ms</option><option value="150">DROID-like · 150 ms</option></select></label>
-          <p class="hint">Smoothing and camera changes apply on the next connection.</p>
+          <label class="compact-label">Translation ratio<select id="positionScale" aria-describedby="positionScaleHint" data-connection></select></label>
+          <p id="positionScaleHint" class="hint">Controller travel ÷ arm target travel. At 0.8, moving 8 cm sets a 10 cm target displacement.</p>
+          <p class="hint">Smoothing, translation ratio and camera changes apply on the next connection.</p>
           <div class="separator"></div>
           <label>Motion option<select id="profile"></select></label>
           <div class="protection-row"><label class="check"><input type="checkbox" id="protection" checked> Joint protection · ±0.35 rad</label><button id="apply">Apply</button></div>

@@ -19,9 +19,20 @@ async function command(action,options={}){
   catch(e){notice(e.name==='AbortError'?'Request timed out. Check the session status before retrying; it may already have been accepted.':e.message);}
   finally{busy--;render();}
 }
-function settings(){return {backend:$('backend').value,host:$('host').value.trim(),serial:$('serial').value.trim(),smoothing:$('smoothing').checked,smoothing_ms:Number($('smoothingMs').value),profile:$('profile').value,joint_protection:$('protection').checked,cameras:$('cameras').checked};}
+function settings(){return {backend:$('backend').value,host:$('host').value.trim(),serial:$('serial').value.trim(),smoothing:$('smoothing').checked,smoothing_ms:Number($('smoothingMs').value),position_scale:Number($('positionScale').value),profile:$('profile').value,joint_protection:$('protection').checked,cameras:$('cameras').checked};}
 function recordOptions(){return {name:$('batchName').value,task:$('task').value,root:$('output').value,count:Number($('count').value),seconds:Number($('seconds').value),pause:Number($('pause').value),reset_between:$('resetBetween').checked};}
-function fillDefaults(d){$('backend').value=d.backend;$('host').value=d.host;$('serial').value=d.serial;$('smoothing').checked=d.smoothing;if(![...$('smoothingMs').options].some(o=>Number(o.value)===d.smoothing_ms))$('smoothingMs').add(new Option('Custom · '+d.smoothing_ms+' ms',d.smoothing_ms));$('smoothingMs').value=String(d.smoothing_ms);$('profile').value=d.profile;$('protection').checked=d.joint_protection;$('cameras').checked=d.cameras;$('output').value=d.output;}
+function fillDefaults(d){
+  $('backend').value=d.backend;$('host').value=d.host;$('serial').value=d.serial;$('smoothing').checked=d.smoothing;
+  if(![...$('smoothingMs').options].some(o=>Number(o.value)===d.smoothing_ms))$('smoothingMs').add(new Option('Custom · '+d.smoothing_ms+' ms',d.smoothing_ms));
+  $('smoothingMs').value=String(d.smoothing_ms);
+  const scale=$('positionScale');
+  scale.replaceChildren(...d.position_scales.map(option=>new Option(option.label,option.value)));
+  if(!d.position_scales.some(option=>option.value===d.position_scale)){
+    scale.add(new Option('Custom · '+(1/d.position_scale).toPrecision(4),d.position_scale));
+  }
+  scale.value=String(d.position_scale);
+  $('profile').value=d.profile;$('protection').checked=d.joint_protection;$('cameras').checked=d.cameras;$('output').value=d.output;
+}
 function optionsList(id,values){const signature=JSON.stringify(values);if($(id).dataset.signature===signature)return;$(id).dataset.signature=signature;$(id).replaceChildren(...values.map(value=>new Option(value,value)));}
 function fmt(value,digits=1){return typeof value==='number'&&Number.isFinite(value)?value.toFixed(digits):'—';}
 function flag(id,title,value,yes,no){text(id,title+': '+(value==null?'—':value?yes:no));$(id).classList.toggle('bad',value===false);}
