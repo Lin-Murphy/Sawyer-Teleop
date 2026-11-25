@@ -144,7 +144,16 @@ P2 分支 CI 在 `a4f5889` 上通过。
   - P4 实现要点；
   - 给新会话的提示词。
 
-下一步（在 RobotPC 上）：按接手文档 §2–§5 执行；P4 等 #8 合并。
+PR #8 已于 2026-11-25 合入 robot-vla main（`e1facba`）。之后的处理：
+- 将 main 合进 `feat/robot-eval-vision`（`2ec5c0b`），只有 `tools/check_robotpc.py` 的测试列表冲突，两边都保留；
+- 补上 `handoffs/RobotPC/README.md` 的评测入口；
+- 接手文档改为 P4 已解除阻塞，并写入给 RobotPC 新会话的提示词（`38b77ea`），内容为：先核对和实测，再从 `feat/robot-eval-vision` 开 `feat/robot-eval-trial` 做 P4。
+
+验证情况：
+- 本机评测 25 项通过；
+- 完整的 `tools.check_robotpc` 在本机因缺少 `jsonschema` 等协议依赖，有 18 个测试模块导入失败，与本次改动无关。未在本机安装这些依赖，以推送后的 CI 为准。
+
+下一步（在 RobotPC 上）：按接手文档 §8 的提示词执行。
 
 ### 推理评测范围调整为 ID / OOD 位置 / 抗干扰（2026-11-25，仅离线准备，未评测）
 
