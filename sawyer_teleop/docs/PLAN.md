@@ -8,6 +8,353 @@
 
 ## 当前决定
 
+### 评测系统迁往 robot-vla：方案草案（2026-11-25，只写方案，待确认）
+
+**A/B 无需更新，未改代码。**
+
+摆放脚本已到稳定点：
+- `eval_place.py` 的重连问题已修复，相关 14 项测试通过，包括 `test_eval_place` / `test_eval_vision` / `test_eval_success`。
+  重连问题包括：回执队列满、IK 超时上限、空闲 IK 连接被重置、B 释放旧会话。
+- diff 对照和"跳过机械臂"已经实现并测试，但**还没在现场和 Gazebo 上验证**，列为待办。
+- 代码未提交。
+
+迁移决定：
+- 评测只用于测试自有模型，不补基线、不做多任务和视觉 OOD。
+- 执行表、记录、证据、统计、协议、冻结的 v2 表、训练分布和条件表生成器、图像参考迁入 robot-vla，改为从 HF 读取。
+- 机械臂定位暂时留在 sawyer-teleop。
+
+方案草稿：robot-vla 本地分支 `feat/robot-eval-migration`（从 `main@4c31348` 开出）中的 `robot_pc/EVAL_MIGRATION_PLAN.md`，未提交、未推送。
+克隆位置为 `D:\project\Sawyer\robot-vla`。
+
+只读核对中的发现：
+- robot-vla 的 rollout、真机执行器和相机工具都在**未合并的 PR #8**（`feat/robot-r5-readonly@e05707f`）中。
+  rollout 只写 `execution.jsonl` / `summary.json`，**不录相机画面**；`robot_pc/recording` 仍是占位。
+- #8 的 `hardware_io.load_teleop()` 直接导入本仓库源码，用 Intera 官方 IK 发布 `joint_command`，并检查是否有其他发布者。
+  也就是说，robot-vla 已有不经 A/B 桥接的机械臂控制路径。因此方案建议：
+  - 图像对照和免机械臂摆放迁入 robot-vla，因为推理时相机在 RobotPC 上，判定应使用推理时的相机；
+  - 机械臂定位等 #8 合并后，另行评估是否改用 `hardware_io`。
+- HF 读取**受阻**：`Sawyer-king/Sawyer_Pull_Pick_Place` 匿名访问返回 401；
+  本机 `Murphy-Lin` token（Sawyer-king 组织成员）也显示 not found；旧 `Murphy-Lin/Sawyer_Pull_Pick_Place` 已不存在。
+  方案改为：固定 revision；首帧通过 HTTP Range 只读 921,600 字节，避免整份下载约 33 GB；token 只放本地。
+- Python 3.8：只有 `extract_grasp_poses.py` 第 132 行用了 3.9 的字典合并运算 `|`。
+  robot-vla 的 RobotPC CI 不装 NumPy / OpenCV，所以统计部分只用标准库，图像部分另设可选测试。
+
+**确认与落实（同日，用户：按推荐来）。**
+- 方案定稿后推送为 robot-vla PR [#11](https://github.com/Anthony-EEE/robot-vla/pull/11)，提交 `6a4961e`，只含文档，未合并。
+  - 同时新增交接记录 `handoffs/RobotPC/EVAL_MIGRATION_2026-11-25.md`。
+  - `handoffs/RobotPC/README.md` 的入口链接等 #8 合并后再补，避免冲突。
+  - 首次推送时本地克隆未配置作者，提交失败，但空分支已推上远端（与 main 相同）。之后在该仓库内配置用户 GitHub noreply 身份，重新提交并推送。
+- 已确认的决定：
+  - 目录为 `robot_pc/evaluation/`；
+  - 录制沿用遥操格式，默认存 mp4；
+  - P4 等 #8 合并后从 main 开分支；
+  - `eval_place` 拆分：图像对照和免机械臂部分迁入，机械臂定位暂留本仓库；
+  - **成功标准为入碗**，只进抽屉算失败（`place_miss`），与 VLA 任务指令一致。
+- **初始条件表 v3**：[生成器](../../windows-local/artifacts/eval-init-conditions-20261125-v3/generate_init_conditions.py)（`680d9c02…ed50`）、
+  [表](../../windows-local/artifacts/eval-init-conditions-20261125-v3/init_conditions.csv)（`ed5e1283…7f7c`）、
+  [参数](../../windows-local/artifacts/eval-init-conditions-20261125-v3/init_conditions_meta.json)（`15c4b95b…578c`）。
+  - 物体 OOD 在"抓取坐标距训练凸包 2–6 cm"之外，还要求目标经单应矩阵投到图像后，距训练星中心像素凸包 ≥ 14.3 px（判定阈值 6.35 px + 单应误差中位数约 7.9 px）。可采样面积约 64 cm²。
+  - ID 和 id_seen 共 40 条与 v2 逐项一致；同种子重跑后逐字节一致；表中新增的 `proj_px_hull_dist` 与 `eval_vision` 计算值一致。
+  - 物体 OOD 两档的投影距离为 14.6–38.0 px，坐标距离为 2.2–6.0 cm。
+  - **物体 OOD 几乎都落在训练分布沿 y 方向的两端之外**（y 约 0.18–0.23 或 0.59–0.63 m），因为相机视角下 x 方向（纵深）的变化很小。这些点靠近桌边，`workspace/IK` 共 30 条需现场确认。
+  - v2 作废，原因是物体 OOD 投影后有 7/10 条与训练位置相近。
+  - [EVAL_PROTOCOL](EVAL_PROTOCOL.md) 已改用 v3 和入碗标准。
+- 仍待定：HF 读权限（本机 token 读不到 Sawyer-king 数据集）、抽屉初始开度（现场测量）、对比方法列表。
+
+**P1 完成（同日）。**
+
+用户要求只在功能分支上工作、不开 PR，没用的 PR 关掉。#11 已关闭，未合并；分支保留，无其他未关闭的 PR。
+
+P1 在 robot-vla 分支 `feat/robot-eval-core`（基于 P0 分支）上，提交 `89a6432`，已推送，未开 PR：
+- `robot_pc/evaluation/` 提供 `run-order | judge | analyze`，只用标准库；
+- 记录改为只写一次的 `judged.json` 和 P4 的 `auto.json`，重跑编号为原编号加 R1；
+- 协议按 robot-vla 调整为 `PROTOCOL.md`；
+- 冻结表 `conditions/v3/`。CSV 用 CRLF 换行，本机 `core.autocrlf=true`，所以加了 `.gitattributes` 设为 `-text`；提交后的 blob 哈希仍为 `ed5e1283…`。
+
+测试与一致性：
+- 新增 11 项 unittest，加入 `tools.check_robotpc`，本机 Python 3.12 下通过；3.8 / 3.10 由 CI 验证，推送时尚未出结果。
+- 迁移一致性（`robot_pc/validation/evaluation-p1-2026-11-25/report.json`）：
+  - 三组 `run-order` 新旧输出逐字节一致；
+  - 同一份已填写的旧格式表统计后，`results.json` 去掉路径和脚本哈希后逐值一致，`results.md` 除标题行外一致。
+
+P1 分支 CI（`Offline contracts`，Python 3.8 / 3.10 + HPC core）在 `89a6432` 上通过。
+
+**HF 访问解除阻塞（同日）。**
+- 第一次没跑通的原因：`~/.cache/huggingface/token` 里误存了两个 token；实际生效的旧 `lerobot101` 只有个人仓库权限；第二个 token 已失效。
+- 用户曾在对话截图中暴露一个 token，已建议撤销。用户重新执行 `hf auth login --force` 后，账号 `Murphy-Lin` 可以访问私有 gated 数据集 `Sawyer-king/Sawyer_Pull_Pick_Place`。
+- 固定 revision `654a35e6f2539f0f54c0d09bfd4c8eb879344a92`，与 11-19 公开上传时的 main 一致。
+- 只读核对，只用标准库，下载量仅 1 条首帧（921,600 字节）：
+  - 远端共 918 个文件；本地与远端都是 61 条录制，集合相同；
+  - 训练分布 / 图像参考的 243 个输入文件哈希全部一致；
+  - 60 条 RealSense `frames.rgb` 大小一致，抽查首尾 2 条完整 sha256 与 LFS 一致；
+  - HTTP Range 读首帧返回 206，耗时 1.2 s，哈希与 `vision.json` 一致。
+- [脚本](../../windows-local/artifacts/hf-verify-20261125/hf_verify.py)（`5ce60bf6…c276`）、[报告](../../windows-local/artifacts/hf-verify-20261125/hf_verify_report.json)（`29441f75…6cefc`）。
+- robot-vla 的方案和交接已同步，提交 `207d846`，已推送 `feat/robot-eval-core`。
+
+**P2 完成（同日）。** robot-vla 分支 `feat/robot-eval-hf`（基于 `feat/robot-eval-core`），提交 `a4f5889`，已推送，未开 PR。
+
+- 推送时 GitHub 连续 3 次返回 500 Internal Server Error（状态页正常），第 4 次成功，属于 GitHub 侧的临时故障。
+- 新增模块：
+  - `hf_source.py`：只用标准库；revision 必须是 40 位提交号；token 不写入任何输出；按 LFS / git 哈希校验后才缓存；首帧用 Range 读取；
+  - `distribution.py` / `conditions.py`：算法与本仓库的原脚本相同；
+  - 子命令 `hf-check` / `distribution` / `conditions`；
+  - `configs/evaluation.example.json`。
+- 产物 `train_distribution/grasp_poses.json`（`92cf1c02…`）和 `grasp_orientation.json`（`ccfea953…`）来自 HF revision `654a35e6`，已入库，`.gitattributes` 设为 `-text`。
+- 实测：
+  - `hf-check` 看到 918 个文件、30 + 31 条录制；
+  - 从 HF 提取读取 215 MB，耗时约 65 s，缓存在 robot-vla 的 `data/evaluation/hf/`（忽略）。方案里原先估计"几 MB"有误，已更正。
+- 一致性（robot-vla `robot_pc/validation/evaluation-p2-2026-11-25/report.json`）：
+  - HF 来源 == 本地来源 == 本仓库原产物（`grasp_poses.json` `1d959138…`、`grasp_orientation.json` `08b9885b…`），包括参数、统计、逐条位姿、排除项、183 个输入哈希和姿态；
+  - 用 HF 训练分布加本仓库的 `vision.json` 在 robot-vla 重跑 v3 生成器，CSV 与冻结表 `ed5e1283…` 逐字节一致（NumPy 1.24.4）。
+- 测试：新增 HF 读取 7 项（回环模拟服务器）、训练分布 2 项（无 NumPy 时跳过），已加入 `check_robotpc`；连同 P1 本机共 20 项通过。
+
+P2 分支 CI 在 `a4f5889` 上通过。
+
+**P3 离线部分完成（同日）。** robot-vla 分支 `feat/robot-eval-vision`（基于 `feat/robot-eval-hf`），提交 `d677f56`，已推送，未开 PR。
+
+- 新增模块：
+  - `vision.py`：由本仓库 `eval_vision.py` 移植，判定 / 面板 / 窗口不变；参考数据改为从 HF 用 Range 读首帧；新增 V4L2 只读主相机 `LiveCamera`；加载参考时校验背景图和覆盖图的哈希。
+  - `placement.py`：免机械臂摆放（日志格式与本仓库 `eval_place.py` 相同，`mode=manual`）和 `probe`（背景差统计）。
+- 新增子命令 `vision-build` / `vision-probe` / `place`。
+- 实测：
+  - `vision-build` 从 HF 读 60 条首帧，耗时约 88 s；
+  - `vision_reference/vision.json`（`d4328dae…`）入库，图片不入库，缓存在 robot-vla 的 `data/evaluation/vision/<revision>/`。
+- 一致性（robot-vla `robot_pc/validation/evaluation-p3-2026-11-25/report.json`）：
+  - `vision.json` 的 12 个关键字段与本仓库 `placement-vision-20261125/vision.json`（`74156d29…`）一致；
+  - 120 个首帧 / info 哈希一致；
+  - 背景图和覆盖图的像素及文件字节一致；
+  - 60 帧训练首帧全部判为 ID；
+  - robot-vla 仅用自己的训练分布和图像参考重跑 v3 生成器，与冻结表 `ed5e1283…` 逐字节一致。
+  
+  robot-vla 现在可以只从 HF 重建全部参考数据和条件表。
+- 测试：新增图像对照 5 项（缺少 NumPy / OpenCV 时跳过）；连同 P1 / P2 本机共 25 项通过。
+
+下一步：
+- 在 RobotPC 上运行 `vision-probe`，重定背景差阈值（目前 12 来自训练画面），并确认主相机为 640×480、相机位姿与训练一致；
+- P4 等 #8 合并；
+- 本仓库的改动尚未提交。
+
+### 推理评测范围调整为 ID / OOD 位置 / 抗干扰（2026-11-25，仅离线准备，未评测）
+
+**A/B 无需更新。** 本条取代下文"推理评测想法"中的 OOD 轴设计，以及 v1 初始条件表。用户决定评测只做三类：
+- **ID**：`id_unseen` 30 条（P1），`id_seen` 10 条（P2）。
+- **OOD**：只改物体和碗的位置，各 15 条：
+  - `obj_pos`：物体在训练凸包外 2–6 cm，随机方向；
+  - `bowl_pos`：物体在 ID 位置，碗在抽屉内相对训练位置随机偏移 ≥4 cm；
+  - `obj_bowl_pos`：两者同时在训练范围外。
+- **抗干扰**：在 `id_unseen` 前 15 条上各执行一次，参数交替：
+  - `pull_drawer`：机械臂接触把手前，把抽屉再拉出 +5 / +10 cm；
+  - `displace_object`：抽屉已开、夹爪闭合前，物体沿 y 移动 ±5 cm；
+  - `move_bowl`：夹住物体后、松爪前，碗横向移动 ±5 cm。
+
+删除朝向（五角星与夹爪合起来的周期是 36°，训练最大空白只有 3.2°）、静态干扰物、换物体、推回抽屉和暂停。
+
+- v2 初始条件表：[生成脚本](../../windows-local/artifacts/eval-init-conditions-20261125-v2/generate_init_conditions.py)（`e6feedc4…8866`）、
+  [表](../../windows-local/artifacts/eval-init-conditions-20261125-v2/init_conditions.csv)（`e89b89dc…49bc7`，85 条）、
+  [参数](../../windows-local/artifacts/eval-init-conditions-20261125-v2/init_conditions_meta.json)（`bce08569…d341`）。
+  - 种子与 v1 相同，ID 30 条与 v1 完全一致；同种子重跑后逐字节一致。
+  - 碗偏移用抽屉坐标系下相对训练位置（home）的 cm 值表示。抽屉内尺寸未量，偏移范围 dx ±6、dy ±8 cm 为暂定值。
+  - 需现场确认的条目：`workspace/IK` 30 条、`drawer_clearance` 12 条、`drawer_interior` 30 条。
+- `scripts/eval_success.py` 已改为新的三种抗干扰：参数写入 `perturb_param` 列，新增 `--perturb-n`（默认 15），去掉 `object` / `distractors` 列，新增碗偏移列，删除 `distractor_grasp` 失败模式。
+  - 每个方法 P1 共 120 次，2 个方法共 240 次。用 v2 表和随机模拟结果演示了执行表和统计输出，格式正确（模拟数字无意义）。
+  - `tests/test_eval_success.py` 5 项通过。
+  - 哈希：`eval_success.py` `85704c08…5954`、`test_eval_success.py` `1c91e387…b4f5`。
+- [EVAL_PROTOCOL](EVAL_PROTOCOL.md) 已同步更新为三类评测，仍是草案。
+
+**先试跑（同日，用户决定）。** 当前目的是验证并跑通 benchmark，规模缩小为每个方法 35 次：
+- ID：`id_unseen` 前 10 条（C001–C010）；
+- OOD：只做 `obj_bowl_pos` 前 10 条（C071–C080）；
+- 抗干扰：三种各 5 次，使用 C001–C005。
+
+`run-order` 新增 `--take level:N,...` 参数，按表中顺序从 v2 表里取子集，不另建条件表，扩大规模时试跑条件原样包含在内。
+用 v2 表生成单方法执行表核对：35 次，条件编号如上；只有 OOD 的 10 条需要现场确认（全部要确认可达和碗位置，其中 3 条还要确认与抽屉的间隙）。
+专项测试 6 项通过。哈希：`eval_success.py` `91ae2832…404a`、`test_eval_success.py` `6417afe9…8473`。
+n=10 时区间约 ±28 个百分点，试跑结果只用于检验流程，不作为论文结论。
+
+**摆放方式（同日，用户决定）。** ID 和 OOD 的物体与碗都用机械臂定位。抗干扰组初始摆放即 ID 的 C001–C005，干扰本身手动施加，不需要机械臂定位。
+不使用图像坐标换算：需要手眼标定，误差与 ID 点到训练点的间距 1–3 cm 相当。
+- 物体：机械臂悬停在条件表中的末端 xy、抓取高度 +2–3 cm 处，人工把物体放在两指之间。悬停点到不了即视为不可达，摆放过程同时完成可达性检查。
+- 碗：条件表中是抽屉坐标系下的偏移，需一次标定换算到 base 系。
+  - 抽屉拉到固定位置 `drawer_ref`，机械臂对准碗原位，记下 `bowl_home`；
+  - 抽屉退回约 10 cm，再记一次，得到拉出方向 u，横向方向 v 与之垂直；
+  - 目标 = `bowl_home` + dx·u + dy·v。
+  
+  结果写入评测目录的 `bowl_calibration.json`。
+- 每个条件首次摆好后保存两路相机参考图，同条件后续试验用相机对比工具对照参考图复位。
+- 协议 §3 已更新。
+
+**摆放脚本与图像对照（同日，未在 Gazebo 或真机上运行）。**
+
+新增两个脚本：
+- `scripts/eval_place.py` 走 A 端 `RobotClient`，B 做远程 IK，A 下发关节目标，子命令如下：
+  - `check`：只求 IK，不运动；
+  - `calibrate-bowl`：用点动对准碗原位两次，得到 `bowl_calibration.json`；
+  - `place`：碗 → 推回抽屉 → 物体 → 退回 → 图像对照 → 参考图，写 `placement_log.jsonl`；
+  - `build-vision`：生成图像对照参考。
+- `scripts/eval_vision.py`：图像对照，供 `place` 调用。
+
+悬停姿态与运动：
+- 悬停姿态用条件表中的偏航，加上训练抓取姿态的中位数：俯仰 1.0°、横滚 176.48°。
+  这两个值来自新增的 [extract_grasp_orientation.py](../../windows-local/artifacts/train-distribution-20261125/extract_grasp_orientation.py)（`85c7fe6e…9681`），
+  重算的偏航与原值最大相差 0.005°。
+- 运动方式：先到接近高度 0.72 m，再降到抓取高度 +3 cm。整段路径先逐点求 IK，并检查相邻路点关节跳变 ≤ 0.15 rad，然后再执行。
+  速度 ≤ 5 cm/s，目标点必须在工作空间框内。默认只允许 Gazebo，真机需加 `--allow-real`。
+
+按用户要求新增两项功能：
+- **diff 对照**：`--vision` 打开实时窗口，判定 ID / OOD 并保存 `<cond>_diff.png`。
+- **跳过机械臂**：`--no-arm` 不连接机械臂，碗按尺子量偏移，物体对照窗口手动摆放。
+
+图像对照的验证：
+- 60 条训练 RealSense 首帧都能分割出单个红色连通域（约 450–570 px）。
+- 用"闭爪末端 xy ↔ 星像素中心"拟合单应矩阵，留一法误差中位数 2.48 cm、p90 5.40 cm、最大 11.1 cm。
+  把随偏航转动的抓取偏移加入拟合也没有改善，说明误差主要来自抓取点相对星中心的偏差，而且图像中 1 cm 只有 3–4 px。
+  因此 ID / OOD 判定改为像素空间的训练星中心凸包（ID：在凸包内；OOD：在凸包外 ≥ 6.35 px，约 2 cm），单应矩阵只用于画引导圈和估计坐标。
+- 两批录制分别拟合的单应矩阵在网格点上相差 4–17 px，首帧背景平均差 4.4，相机在两批之间没有明显移动。
+- 60 帧训练首帧当作实时画面时全部判为 ID，背景差 3.6–5.8（报警阈值 12）。
+- 中位数背景显示，训练时抽屉的初始状态是拉开一小段。
+
+参考数据：[placement-vision-20261125](../../windows-local/artifacts/placement-vision-20261125/)，`vision.json` 的哈希为 `74156d29…c3fb2`，共 3.4 MB。
+其中含 60 帧首帧 jpg、背景、覆盖区，以及真实数据面板示例 `example_panel_train_frame_as_live.png`。
+
+**发现：** 把 C071–C080 的目标投到图像上，只有 C071、C072、C078 明显在像素凸包外；其余 7 条在凸包内或超出不足 2 cm。
+条件表的 OOD 是按抓取坐标凸包生成的，抓取点偏差使它在画面上可能仍与训练位置相近，需要决定是否重新采样。
+
+修复与测试：
+- 修复了三个问题：
+  - 回执队列不取会在约 4 s 后 `receipt_queue_full` 断线，改为每次下发前清空回执；
+  - B 的 IK 超时上限是 0.2 s，原先请求 0.3 s 被拒；
+  - 空闲的 IK 连接会被 B 重置，改为重试一次。
+- 测试：`tests/test_eval_place.py` 4 项，在 fake 后端上端到端跑通标定换算、可达性检查和完整摆放，到位误差 < 5 mm，check 不改变关节；
+  `tests/test_eval_vision.py` 4 项，用合成场景验证 ID / OOD / 太近 / 相机移动的判定、按键逻辑和免机械臂流程；
+  加上 `test_eval_success.py`，共 14 项通过。
+- 哈希：`eval_place.py` `7a3d422f…599e`、`eval_vision.py` `e5f75da6…254e`、`test_eval_place.py` `9376dc9e…09d`、`test_eval_vision.py` `637b4392…e3c7`。
+- [DEPLOYMENT](DEPLOYMENT.md#评测初始条件摆放2026-11-25仅在-fake-后端和离线图像上验证) 已补充操作命令，[EVAL_PROTOCOL](EVAL_PROTOCOL.md) §3 / §9 已更新。
+
+下一步：
+- 决定 OOD 条件是否按"坐标和图像都在训练范围外"重新采样；
+- 确定成功标准（入碗还是入抽屉）；
+- 现场量抽屉初始开度和内尺寸，标出碗的 home 位置；
+- 在 Gazebo 上跑一次 `check` / `place`；真机需另行授权；
+- 确定方法后定稿协议，生成试跑执行表。
+
+### 推理评测想法：OOD 位置组合 / 干扰物 / 物体（2026-11-25，仅记录想法，未实施）
+
+> 已被上文"推理评测范围调整"取代，以下保留作历史记录。
+
+**A/B 无需更新。** 用于抽屉放方块策略推理成功率评测和论文报告。评测分 ID、OOD、中途打断三类；本条只记录用户选定的三条 OOD 轴。
+未生成初始条件，未写协议，也未运行试验。
+
+- 前置：先从训练录制量化训练分布，以有效闭爪时刻的末端位姿近似方块位置，加上抽屉初始开度，得到训练范围（包围盒 / 凸包）。
+  ID 与 OOD 都以此为界。结果见下文"训练分布提取"。
+- **位置组合修改**：方块位置、方块朝向、抽屉初始开度单独或组合变化。分档：训练范围内未见组合（ID-组合），
+  超出范围 +3 cm / +6 cm（OOD-外推），以及位置与开度同时越界（组合越界）。每次试验记录到训练范围边界的距离，按距离画成功率曲线。
+- **干扰物**：桌面加入与任务无关的物体，分 1 个 / 3 个，位置分远离路径和靠近方块 / 抽屉把手两档。干扰物清单与摆放位置提前固定。
+- **物体**：替换目标物体，只改一个属性：颜色 / 尺寸 / 形状（如圆柱）。成功定义不变，物体清单与尺寸提前登记。
+- 原则：每组只改一个因素，组合放在最后作附加实验；初始条件用固定种子预采样，所有方法共用并交错执行；每档约 15–20 次（真机）。
+- 统计：每档报告 `k/n` 和 Wilson 95% CI；ID 与 OOD 比较用 Fisher 精确检验；多方法 / 多轴用逻辑回归或 Holm 校正；
+  同一初始条件下的方法间比较用 McNemar 检验。
+- 每次试验记录：`split`、`ood_axis`（position / distractor / object）、`ood_level`、`ood_distance`、success、阶段、失败模式、
+  checkpoint / 代码 / 配置哈希、视频路径。
+
+**训练分布提取（2026-11-25）。** 读取两批抽屉放方块录制 `batch_20261110_drawer_cube`（30 条）和 `batch_20261119_drawer_cube`（31 条），
+排除 `episode_20261119T170517_4139ebc11a71`（3.945 s，无命令），共 60 条。
+51 条只闭爪 1 次，8 条 2 次，1 条 3 次，多出的都是原地试抓后松开再重抓。
+因此有效抓取取 xy 搬运距离（闭爪到下一次松爪）最大的那次闭爪。
+首版按"第一次闭爪"或"保持最久"选取，会在 181116、181512、181926 等条目上选中原地试抓，已弃用。
+60 条有效抓取的搬运距离为 10.5–23 cm（中位数 17 cm），无低于 5 cm 的。
+位姿为 base 系 `right_hand` 末端（非指尖），抓取后 0.5 s 取值。
+
+| 量（m / °） | min | p5 | 中位 | p95 | max |
+|---|---|---|---|---|---|
+| 抓取 x | 0.517 | 0.532 | 0.555 | 0.584 | 0.615 |
+| 抓取 y | 0.237 | 0.247 | 0.395 | 0.521 | 0.577 |
+| 抓取 z | 0.581 | 0.585 | 0.594 | 0.606 | 0.613 |
+| 抓取偏航 | 43.9 | 51.6 | 71.7 | 92.1 | 107.5 |
+| 放置 x / y | 0.251 / 0.297 | | 0.405 / 0.365 | | 0.446 / 0.424 |
+
+结论：
+- 方块位置主要沿 y 变化（跨约 34 cm），x 只跨约 10 cm（std 1.8 cm），抓取 xy 凸包面积 224 cm²，训练覆盖近似一条沿 y 的窄带。
+  位置 OOD 优先沿 x 外推（x < 0.52 或 > 0.61 m），y 外推需先确认工作空间。
+- 偏航 44–108°，可作为朝向 OOD 的边界。
+- 放置点集中在 (0.40, 0.36) 附近，抽屉位置基本固定。
+- 起始位姿固定（x 0.231–0.257，y 0.334–0.342）。
+- 11-19 批次的 x 更窄（0.532–0.584），偏航只到 83°。
+- 抽屉初始开度无法从本体数据得出，需用相机首帧或现场测量补充。
+
+[脚本](../../windows-local/artifacts/train-distribution-20261125/extract_grasp_poses.py)
+（SHA-256 `21fb2913…b564`，用 `windows-runtime/python/python.exe -I` 运行）、
+[结果和 183 个输入文件哈希](../../windows-local/artifacts/train-distribution-20261125/grasp_poses.json)（`1d959138…fe4b`），
+其中含逐条抓取 / 放置位姿和全部闭爪记录。
+
+**初始条件表（2026-11-25）。** 依据上述训练分布，用固定种子 `20261125` 生成 200 条初始条件，其中 P1（核心）150 条、P2（可选）50 条。
+同种子重跑后 CSV 逐字节一致。坐标是抓取时末端的 base 系 xy，摆放时把机械臂移到该点，再在夹爪正下方放方块。
+
+| 轴 | 档位（条数，优先级） | 规则 |
+|---|---|---|
+| ID | id_unseen（30，P1）、id_seen（10，P2） | unseen：在凸包内且距边界 ≥0.5 cm，距训练点 ≥1.0 cm，点间距 ≥1.2 cm，偏航 50–100°；seen：训练原位 |
+| 位置组合 | x_out_3cm / x_out_6cm / yaw_gap / combo_x3cm_yawgap（各 15，P1），y_out_3cm（10，P2） | x 方向从该 y 处的凸包边界外推，±x 交替；yaw_gap 时方块偏航（模 90°）取 23–38°，位于训练空白 17.5–43.9° 内 |
+| 干扰物 | d1_near / d3_mixed（各 15，P1），d1_far（15，P2） | 方块位置和偏航复用 ID 前 15 条（`paired_ref`），可做 McNemar 配对；near 距方块 6–9 cm，far 距方块 ≥12 cm 且距搬运路径 ≥8 cm |
+| 物体 | color / shape（各 15，P1），size（15，P2） | 同样复用 ID 前 15 条的位置 |
+
+- 首版要求 ID 点距训练点 ≥1.5 cm、点间距 ≥2 cm，可行区域只剩约 42 cm²，采样无法结束。已放宽到 1.0 / 1.2 cm，并加了采样次数上限。
+- 38 条标了 `requires_check`：
+  - x_out_6cm 的 15 条需确认可达或 IK；
+  - −x 侧（靠近机器人、贴近抽屉 x≈0.40）共 21 条需确认与抽屉的间隙（`drawer_clearance`）；
+  - y_out_3cm 的 10 条需确认工作空间和桌边。
+  
+  现场先空跑这些条目，确认不可达的按协议登记后替换，不能直接删除。
+- 待补：抽屉初始开度（`drawer` 列暂为 `closed_as_train`）；干扰物 D1–D3 和物体 OBJ_COLOR / OBJ_SHAPE / OBJ_SIZE 的实物登记；
+  对比方法确定后，另行生成随机交错的执行顺序。
+
+[脚本](../../windows-local/artifacts/eval-init-conditions-20261125/generate_init_conditions.py)（`b820935b…77b5`）、
+[初始条件表](../../windows-local/artifacts/eval-init-conditions-20261125/init_conditions.csv)（`78d71c6a…9453`）、
+[参数与计数](../../windows-local/artifacts/eval-init-conditions-20261125/init_conditions_meta.json)（`88022c8b…8907`，其中记录了输入 `grasp_poses.json` 的哈希）。
+
+**评测协议草案与脚本（2026-11-25）。** 本次只做离线验证，未实际评测任何策略。
+- [EVAL_PROTOCOL](EVAL_PROTOCOL.md)：草案，未定稿。内容包括：成功与阶段定义、60 s 时间上限、执行顺序、排除与重跑规则、逐次记录字段、录像与检查图要求、预先确定的统计方法，以及开跑前待定项。
+- `scripts/eval_success.py` 有三个子命令：
+  - `run-order`：按条件随机排序，同一条件下各方法随机先后、连续执行，共用一次摆放；打断组在 ID 前 15 条上各加一次 `displace_cube`（±5 cm 交替）和 `push_drawer`；不覆盖已有文件。
+  - `evidence`：从项目录制生成 `overview.mp4`（两路相机按时间戳同步并排，有 ffmpeg 时为 H.264）和 `contact_sheet.jpg`（每路相机一行，首帧 / 中间帧 / 尾帧，可加闭爪 / 松爪，按时间排列，默认不写方法名以便盲评）；外部视频取首 / 中 / 尾帧；写 `evidence.json` 记录所用帧和哈希；不写入录制目录。
+  - `analyze`：校验数据（success 与 stage 一致、失败模式合法、无重复有效试验）后，输出 `results.json` 和 `results.md`，内容包括 Wilson CI、方法间配对 McNemar、与 ID 比较（配对组用 McNemar，位置组用 Fisher）、Holm 校正、打断组的意向和条件成功率、阶段漏斗、失败模式和缺少检查图的试验。统计函数只用标准库。
+- 验证：`tests/test_eval_success.py` 5 项通过。McNemar 和 Fisher 与 scipy 1.10.1 一致，Wilson 与已知值一致，执行表同种子逐字节可复现，用合成录制和视频验证了证据生成。
+  用真实条件表生成 2 个方法的 P1 执行表，共 180 单元、360 次试验。
+  对 `episode_20261119T162608_f8a021b4c136` 生成证据约 5 s，得到 H.264 1280×480、599 帧的总览视频，以及 7 列检查图，人工查看正确。
+- 首次运行时，`-I` 模式下 Windows 控制台为 cp1252，打印中文会崩溃，已改为启动时把输出设为 UTF-8。
+  检查图各列最初按"首 / 中 / 尾 + 夹爪事件"排列，已改为按时间排列。
+- **发现：被抓物体是红色五角星，放入抽屉内的碗中，不是方块。** 夹爪 180° 对称、五角星 72° 对称，有效周期 36°，
+  训练的抓取偏航在 36° 周期内最大空白只有 3.2°（按 72° 周期算为 10.1°）。
+  因此初始条件表中的 `yaw_gap` 和 `combo_x3cm_yawgap` 两档（30 条 P1）作为朝向 OOD 不成立，需在定稿前替换。
+  另外，真实录制首帧中抽屉似乎已部分拉开，抽屉初始开度需核实。
+- 哈希：`eval_success.py` `090eb3a3…a5a5a`、`test_eval_success.py` `8f6ccc2e…0cde`、`EVAL_PROTOCOL.md` 草案将在定稿时记录。
+
+下一步：确定朝向 OOD 的替换方案，重新生成初始条件表；核实抽屉初始开度和阶段 3 的标准（入碗还是入抽屉）；现场空跑 `requires_check` 条目；登记干扰物和替换物体；协议定稿。
+
+### 抽屉放方块补录与合并目录更新（2026-11-19）
+
+**A/B 无需更新。** 原独立合并目录已不在工作区，首次追加在读取该目录时退出。按用户要求从四批原件重建到原采集目录下的 [batch_20261119_drawer_cube](../../windows-local/data/batch_20261119_drawer_cube/)，31 条全部可读，469 个源文件 SHA-256 一致。第四批摘要计为已保存 2 条，实际只有 1 个录制目录，合并按磁盘实数，保留批次摘要并注明缺项。
+
+补录 `episode_20261119T171752_c121b8425659` 长 33.587 s，3,093 条命令、1 次闭爪，命令最大间隔 19.629 ms，双摄 RGB 字节数与索引匹配，时间戳单调。腕相机 4 个间隔超过 100 ms，最长 107.828 ms。此前无命令的 3.945 s 录制仍保留，训练前排除。
+
+按用户要求，四批源录制同盘归档到 [batch_20261119_drawer_cube - raw](<../../windows-local/data/batch_20261119_drawer_cube - raw/>)，按 11 月 10 日的格式把 31 个录制目录平铺在归档根目录，四份原批次摘要以 `source_batch_*.json` 原样保存。核对 469 个归档文件的大小、全部 JSON 哈希及合并目录的录制 ID，两个目录均为 31 条。后续原始数据从 `- raw` 目录读取。[归档路径和校验记录](../../windows-local/artifacts/drawer-cube-merge-20261119/raw_archive.json)。
+
+按用户要求，四份 `source_batch_*.json` 仅在 `- raw` 留存。移除合并目录中的副本前核对了四对文件的 SHA-256，操作后确认合并索引哈希一致且仍有 31 条录制。
+
+用户确认后，用 hf-cli 2.4.0 将合并目录的 31 条录制上传到 [Hugging Face 私有数据集](https://huggingface.co/datasets/Murphy-Lin/batch_20261119_drawer_cube)。HEAD 为 `ecda63c6c2e380d2c5539296dc753afa19782b0c`，Hub 确认为私有，466 个本地文件逐个与远端校验和一致。远端额外文件为仓库的 `.gitattributes`。
+
+用户纠正目标并明确确认公开后，将同一批上传到 [Sawyer_Pull_Pick_Place 的 batch_20261119_drawer_cube](https://huggingface.co/datasets/Murphy-Lin/Sawyer_Pull_Pick_Place/tree/main/batch_20261119_drawer_cube)，公开 main 提交 `654a35e6f2539f0f54c0d09bfd4c8eb879344a92`。验证 31 条、466 个文件的大小和内容哈希，以及 11 月 10 日批次的原树 ID。[公开上传校验](../../windows-local/artifacts/drawer-cube-merge-20261119/hf_public_upload_verification.json)。
+
+[合并校验、参数与哈希](../../windows-local/artifacts/drawer-cube-merge-20261119/verification_after_append.json)、[31 条逐条审计](../../windows-local/artifacts/drawer-cube-merge-20261119/audit_after_append.json)。
+
+
+### 三批抽屉放方块录制合并与审计（2026-11-19）
+
+**A/B 无需更新。** 三批原始录制 `batch_20261119_162608`（21 条）、`batch_20261119_165923`（8 条）、`batch_20261119_171110`（1 条）原样复制为 [合并批次](../../windows-local/merged-data/batch_20261119_drawer_cube/)。单独存放以避免扫描原采集目录时重复计数。全部 30 条可用项目读取器打开，453 个源文件逐文件 SHA-256 一致，合计 37,507,627,200 B。首次验证把空命令文件当成复制校验失败，暂存副本随即清理。复跑记录原始缺项，保留该条及其余原录制。
+
+按旧批次规则发现 `episode_20261119T170517_4139ebc11a71` 仅 3.945 s（低于 15 s），命令 0 条，无闭爪，manifest 仍为成功。用于训练前应排除该条。其余 29 条均有闭爪。6 条共 7 处命令间隔超过 100 ms，最长 1.889 s。腕相机共有 125 处超过 100 ms，最长 152.56 ms，RealSense 最长 70.95 ms。两路 RGB 均与帧索引匹配，命令、状态、两路反馈与双摄均无时间戳倒退或重复。元数据总时长 995.479 s。
+
+[合并校验和逐文件哈希](../../windows-local/artifacts/drawer-cube-merge-20261119/verification.json)、[历史规则审计结果及参数](../../windows-local/artifacts/drawer-cube-merge-20261119/audit.json)。
+
+
 ### Web 平移比例新增 0.75（2026-11-19）
 
 **仅更新 A。** 在 0.7 和 0.8 之间新增 0.75，手柄 7.5 cm 对应末端目标 10 cm。重开 A 后选档，连接并校准。按用户要求跳过验证。
@@ -24,6 +371,14 @@ Chrome + 隔离软件 B 验证六档、0.8 连接时锁定、刷新恢复，软�
 Web、固定录制和停手专项复跑 69 项全部通过，包含首次失败的松手时序用例。
 Docker 前置检查超时后结束，未启动 Gazebo B。ADB 设备列表为空，完整 VR 链路待有 Quest 的隔离 Gazebo 环境验证。
 [输入、参数与源码哈希](../../windows-local/artifacts/translation-ratio-20261119/sha256.json)、[全套报告](../../windows-local/artifacts/translation-ratio-20261119/local.xml)、[专项报告](../../windows-local/artifacts/translation-ratio-20261119/verify.xml)。
+
+### 抽屉放方块录制离线审计（2026-11-19）
+
+**A/B 无需更新。** 对本机 `batch_20261110_drawer_cube` 的 30 条 schema 2 录制审计了 manifest、命令、状态和相机索引。两份目录有相同的 30 个 episode ID，manifest 逐字节相同。有效夹爪命令 66,989 条，每条 episode 均有闭爪，24 条各一次、6 条各两次。19 条有多个控制段及超过 100 ms 的命令间隔，共 25 处，最长 4.55 s。36 次闭爪的前一命令间隔均小于 14 ms，过去最近 RealSense / 腕部帧的最大年龄分别为 65.84 / 54.85 ms。两路帧索引与 RGB 文件字节数一致。
+
+`episode_20261110T175614_c450930d2955` 内命令和状态纳秒时间戳分别倒退 18.08 / 18.20 ms。隔离单条调用旧导出器复现 `command clock regressed`，无成品。首次探针直接传 episode 路径未被目录发现器识别，改为仅替换候选列表后复现。未定位本次训练实际读取的 LeRobot 数据，HF CLI 查询遇到 DNS 失败。保持录制，下一步按实际训练数据逐条核对夹爪动作、分段时间轴及 episode 去重。
+
+[审计结果及逐输入哈希](../../windows-local/artifacts/drawer-cube-dataset-audit-20261119/audit.json)记录参数和每条结果。审计脚本 SHA-256 `1196230bff1b17b07e91532b28982219172047df78706a6966cd341b2fdce17a`，探针 `0110eaf3dfa4148af1ae2e481e7cf1fed73a11679431748cadff2f5bcecb29c6d`，导出源码 `43334101dfd3738dc7fee56f39c190e8b7fd57845ddd9d3ca65102866e29dec7`。
 
 ### Windows 双相机参考对比（2026-11-19）
 

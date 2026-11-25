@@ -27,6 +27,41 @@
 
 实时模式并排显示主相机和腕相机。比对模式按列显示录制参考、当前帧、50% 叠加和差异热图，截图同时记录每路参考帧的编号与时间戳。MAE、RMSE 和特征位移的含义见 [相机比对说明](CAMERA_COMPARE.md)。
 
+## 评测初始条件摆放（2026-11-25，仅在 fake 后端和离线图像上验证）
+
+规则见 [评测协议](EVAL_PROTOCOL.md) §3。在 Sawyer 仓库根目录打开 PowerShell，先关闭占用相机的 A 网页端。
+图像对照参考只需生成一次，训练数据不变就不用重建：
+
+```powershell
+.\windows-runtime\python\python.exe -I sawyer_teleop\scripts\eval_place.py build-vision --data-root windows-local\data --grasp-poses windows-local\artifacts\train-distribution-20261125\grasp_poses.json --out windows-local\artifacts\placement-vision-20261125
+```
+
+**跳过机械臂、只对照图像摆放**（碗按尺子量偏移）：
+
+```powershell
+.\windows-runtime\python\python.exe -I sawyer_teleop\scripts\eval_place.py place --no-arm --conditions windows-local\artifacts\eval-init-conditions-20261125-v2\init_conditions.csv --take id_unseen:10,obj_bowl_pos:10 --vision windows-local\artifacts\placement-vision-20261125 --cameras windows-local\config\operator.json --out <评测目录>
+```
+
+**机械臂定位**：默认只连接 Gazebo，真机必须加 `--allow-real`，且须先获得授权（AGENTS.md 当前只授权仿真）。
+1. 先只做 IK 规划、不运动，检查可达性：
+
+   ```powershell
+   .\windows-runtime\python\python.exe -I sawyer_teleop\scripts\eval_place.py check --operator-config windows-local\config\operator.json --conditions <条件表> --take id_unseen:10,obj_bowl_pos:10 --bowl-calibration <评测目录>\bowl_calibration.json --out <评测目录>\reach_check.json
+   ```
+
+2. 碗标定，只做一次（点动命令为 `x+`、`y-`、`z+` 等，`s 2` 把步长改为 2 mm，回车确认）：
+
+   ```powershell
+   .\windows-runtime\python\python.exe -I sawyer_teleop\scripts\eval_place.py calibrate-bowl --operator-config windows-local\config\operator.json --drawer-ref "拉到底限位" --out <评测目录>\bowl_calibration.json
+   ```
+
+3. 摆放：在 `place` 命令中去掉 `--no-arm`，加上 `--operator-config` 和 `--bowl-calibration`。
+
+**输出**：`placement_log.jsonl`（每条的状态、机械臂到位误差、图像判定数值），
+`reference\<cond_id>_diff.png`，以及两路参考图 `reference\<cond_id>_{realsense,wrist}.png`。
+
+**安全**：所有运动先整段求 IK 并检查关节连续，再开始执行；速度上限 5 cm/s，目标必须在工作空间框内。Ctrl+C 或异常时 B 进入 hold。
+
 ## 机器人时钟自动测量（2026-11-07 起，取代下方手动恢复）
 
 B 启动时及运行中每 2 秒，用普通 UDP（无需 sudo、不改系统配置）向 `SAWYER_ROBOT_HOST`
