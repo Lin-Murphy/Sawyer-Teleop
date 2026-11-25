@@ -153,7 +153,13 @@ PR #8 已于 2026-11-25 合入 robot-vla main（`e1facba`）。之后的处理�
 - 本机评测 25 项通过；
 - 完整的 `tools.check_robotpc` 在本机因缺少 `jsonschema` 等协议依赖，有 18 个测试模块导入失败，与本次改动无关。未在本机安装这些依赖，以推送后的 CI 为准。
 
-下一步（在 RobotPC 上）：按接手文档 §8 的提示词执行。
+**机械臂摆放也已迁入 robot-vla（同日，P5，`b6edc57`）。**
+- 用户指出不必在本仓库中转，现在评测全部在 robot-vla。
+- `robot_pc/evaluation/arm_placement.py` 复用 #8 的 rollout 后端和控制权检查，在 RobotPC 进程内运行本仓库未修改的 BridgeCore；子命令为 `arm-check`、`arm-calibrate-bowl`、`arm-place`，后两个需要 `--execute`。
+- 测试只在 fake 后端上做过（5 项）。Windows 上缺 `fcntl` 和 `jsonschema`，用临时导入替身运行；真实依赖下的结果以 RobotPC 为准。没有运行 Gazebo 或真机。
+- 本仓库 `feat/eval-benchmark` 上的 `eval_place.py` / `eval_vision.py` / `eval_success.py` 不再使用，只作为迁移来源；**该分支不合进 main**。
+
+下一步（在 RobotPC 上）：按 robot-vla 接手文档 §8 的提示词执行。
 
 ### 推理评测范围调整为 ID / OOD 位置 / 抗干扰（2026-11-25，仅离线准备，未评测）
 
