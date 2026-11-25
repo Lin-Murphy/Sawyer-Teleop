@@ -129,10 +129,22 @@ P2 分支 CI 在 `a4f5889` 上通过。
   robot-vla 现在可以只从 HF 重建全部参考数据和条件表。
 - 测试：新增图像对照 5 项（缺少 NumPy / OpenCV 时跳过）；连同 P1 / P2 本机共 25 项通过。
 
-下一步：
-- 在 RobotPC 上运行 `vision-probe`，重定背景差阈值（目前 12 来自训练画面），并确认主相机为 640×480、相机位姿与训练一致；
-- P4 等 #8 合并；
-- 本仓库的改动尚未提交。
+**转到 RobotPC 继续（同日，用户要求）。** RobotPC 环境和实时相机已就绪，后续工作在那边进行。
+- 三个评测分支的 CI 都通过（`207d846` / `a4f5889` / `d677f56`）。
+- 本仓库的评测改动已提交到新分支 `feat/eval-benchmark`（`6311324`），并已推送，未动 `main`，未开 PR。
+  包括 `eval_success.py` / `eval_vision.py` / `eval_place.py`、测试、`EVAL_PROTOCOL.md`、DEPLOYMENT 和 PLAN。
+  RobotPC 需要机械臂定位摆放时，从这个分支取 `eval_place.py`。
+- robot-vla 分支 `feat/robot-eval-vision`（`60ffb78`，含 P0–P3）新增接手文档 `handoffs/RobotPC/EVAL_CONTINUE_ON_ROBOTPC.md`，内容包括：
+  - 进度表；
+  - RobotPC 上的环境和 HF token 配置；
+  - 参考数据重建与比对的命令和预期结果；
+  - 主相机 `vision-probe` 测试和 `place` 试摆；
+  - 现场测量项目；
+  - 待用户决定的事项：#8 是否合并、硬件授权、方法列表和协议定稿；
+  - P4 实现要点；
+  - 给新会话的提示词。
+
+下一步（在 RobotPC 上）：按接手文档 §2–§5 执行；P4 等 #8 合并。
 
 ### 推理评测范围调整为 ID / OOD 位置 / 抗干扰（2026-11-25，仅离线准备，未评测）
 
