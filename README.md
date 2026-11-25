@@ -24,6 +24,8 @@ flowchart LR
 - ✅ Reset 回中时自动张开夹爪并等待确认。
 - ⏳ 待验收：实机 60 s 双相机录制、手动 / 批间 Reset 开夹、停止、完整 VR 用例、耐久与**真机验收**。
 
+LIBERO 分支使用同一 Quest APK 采集抓、拉、放三个 atomic 任务。见 [LIBERO Quest 采集](sawyer_teleop/docs/LIBERO_TELEOP.md)。
+
 最新进度与决定只看 [PLAN](sawyer_teleop/docs/PLAN.md)。
 
 ## 快速开始（Windows 本机仿真）

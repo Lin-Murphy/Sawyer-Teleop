@@ -1,12 +1,20 @@
 # 项目状态
 
-更新：2026-11-19。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
+更新：2026-11-25。当前状态以本页为准；安装见 [SETUP](SETUP.md)，操作见 [USAGE](USAGE.md)，开发与验证见 [DEVELOPMENT](DEVELOPMENT.md)。
 
 > 2026-10-29 发布整理：Windows 入口合并为仓库根目录的 `Setup.cmd` / `Start-A.cmd` / `Start-B.cmd` / `Test.cmd`；
 > 文档合并为 SETUP / USAGE / TROUBLESHOOTING / DEVELOPMENT。下文历史条目里的旧脚本名（Install-Dev、Test-A、Stop-B、Install-Quest 等）、
 > 旧文档名和 `rog-local/`、`windows-local/artifacts/` 证据链接均指整理前的原作者本机环境，未随仓库发布。
 
 ## 当前决定
+
+### Quest 3 → LIBERO atomic 录制（2026-11-25，libero-branch）
+
+LIBERO 的 A、B 都使用此分支的新入口，复用现有 Quest protocol 3 APK。A 通过 ADB 读取手柄，B 在 headless MuJoCo 上以 Panda 原生 OSC_POSE7 执行，浏览器显示两路相机并发起校准、场景切换和录制。新会话需要校准。详细部署见 [LIBERO 采集说明](LIBERO_TELEOP.md)。
+
+CPU 作业 38881170 使用原生 Grasp、Pull、Place，7 项专项通过。合成的 Quest v3 输入经过实际 HTTP、控制器和 HDF5 录制，每个任务 16 条动作、17 帧观测，仅执行保存动作时双 RGB、关节、仿真状态和时间重放差异均为 0。Place 通过原持物准备门槛并保留初始闭爪。首轮 Pull 重放像素差异已通过 fixture、控制器状态恢复和显式激活 GL 上下文解决。Chromium 通过两路预览和校准、录制、保存、换场景操作检查。原 Sawyer 固定 7,177 条输入和旧横移抬手专项通过。
+
+下一次现场验收用真实 Quest 3 核对连接、画面延迟、手感和完整任务成功。上述软件测试验证录制与重放链路。
 
 ### Web 平移比例新增 0.75（2026-11-19）
 
